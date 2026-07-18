@@ -85,14 +85,16 @@ android-arm64: generators
 	$(NDK_BIN)/llvm-strip -S Release/lib/libcompiler-core.a && \
 	$(NDK_BIN)/llvm-strip -S Release/lib/libcore.a && \
 	$(NDK_BIN)/llvm-strip -S external/miniz/libminiz.a && \
-	$(NDK_BIN)/llvm-strip -S external/lz4/build/cmake/liblz4.a
+	$(NDK_BIN)/llvm-strip -S external/lz4/build/cmake/liblz4.a && \
+	$(NDK_BIN)/llvm-strip -S external/cmark/src/libcmark-gfm.a
 	@mkdir -p $(BUILD_DIR)/android-arm64
 	@cp $(SLANG_DIR)/build-android-arm64/Release/lib/*.a $(BUILD_DIR)/android-arm64/
 	@cp $(SLANG_DIR)/build-android-arm64/external/miniz/libminiz.a $(BUILD_DIR)/android-arm64/
 	@cp $(SLANG_DIR)/build-android-arm64/external/lz4/build/cmake/liblz4.a $(BUILD_DIR)/android-arm64/
+	@cp $(SLANG_DIR)/build-android-arm64/external/cmark/src/libcmark-gfm.a $(BUILD_DIR)/android-arm64/
 	@echo "$(YELLOW)Merging libraries into single archive...$(NC)"
 	@cd $(BUILD_DIR)/android-arm64 && \
-	printf 'create libSlangCompiler.a\naddlib libslang-compiler.a\naddlib libcompiler-core.a\naddlib libcore.a\naddlib libminiz.a\naddlib liblz4.a\nsave\nend\n' | $(NDK_BIN)/llvm-ar -M
+	printf 'create libSlangCompiler.a\naddlib libslang-compiler.a\naddlib libcompiler-core.a\naddlib libcore.a\naddlib libminiz.a\naddlib liblz4.a\naddlib libcmark-gfm.a\nsave\nend\n' | $(NDK_BIN)/llvm-ar -M
 	@echo "$(GREEN)✓ Android (arm64-v8a) build complete$(NC)"
 
 # Build all ABIs

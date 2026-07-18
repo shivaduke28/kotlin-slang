@@ -21,7 +21,7 @@ Kotlin API (Android library → AAR)
 - The `slang/` submodule is **build-time only**. Consumers depend on a
   prebuilt AAR published via GitHub Releases; the submodule never reaches
   the app build, and app size is affected only by the bundled `.so`.
-- Slang is pinned to the same version as swift-slang (currently `v2026.4.2`)
+- Slang is pinned to the same version as swift-slang (currently `v2026.13.1`)
   so that reflection behavior stays consistent across platforms.
 
 ## Building
