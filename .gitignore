@@ -7,6 +7,8 @@ slang/generators/
 .gradle/
 local.properties
 *.aar
+*.log
+.cxx/
 
 # IDEs
 .idea/
