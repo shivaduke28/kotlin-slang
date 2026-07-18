@@ -82,10 +82,9 @@ make build ANDROID_NDK=$HOME/Library/Android/sdk/ndk/28.2.13676358 ANDROID_PLATF
 
 ## Testing
 
-Instrumented tests compile the Arshes shader corpus
-(`kotlinslang/src/androidTest/assets/shaders`, copied from
-[Arshes](https://github.com/shivaduke28/arshes) `tests/shaders/`) on a real
-device and assert SPIR-V output and reflection layout.
+Instrumented tests compile the shader corpus in
+`kotlinslang/src/androidTest/assets/shaders` on a real device and assert SPIR-V
+output and reflection layout.
 
 `spike/` contains standalone C++ verification tools (smoke/corpus/reflection
 dumps) used during the initial feasibility spike; they can be run directly via

@@ -1,5 +1,5 @@
-// Reflection dump: compile Arshes test shaders to SPIR-V and dump the same
-// parameter information Arshes' extractParameters reads on iOS (name,
+// Reflection dump: compile test shaders to SPIR-V and dump the same
+// parameter information extractParameters reads on iOS (name,
 // category, binding index, user attributes, type/size/alignment, resource
 // element type) plus bindingSpace, which matters for Vulkan descriptor sets.
 // Usage: reflect_run <prelude.slang> <shader.slang>...
@@ -235,7 +235,7 @@ int main(int argc, char** argv)
             continue;
         }
 
-        // Arshes extractParameters相当: グローバルパラメータの一覧
+        // iOS側のextractParameters相当: グローバルパラメータの一覧
         const unsigned paramCount = layout->getParameterCount();
         std::printf("global parameters: %u\n", paramCount);
         for (unsigned p = 0; p < paramCount; p++)

@@ -1,6 +1,6 @@
-// Corpus compile test: compile Arshes test shaders to SPIR-V on-device.
+// Corpus compile test: compile test shaders to SPIR-V on-device.
 // Usage: corpus_run <prelude.slang> <shader.slang>...
-// Mirrors ArshesのSlangCompiler: prelude prepended to user source, resolution
+// Prelude prepended to user source, resolution
 // macros defined on the session, all defined entry points linked and emitted.
 #include <slang-com-ptr.h>
 #include <slang.h>

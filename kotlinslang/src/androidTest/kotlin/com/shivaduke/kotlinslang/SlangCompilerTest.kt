@@ -8,9 +8,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Arshesのテストシェーダーコーパス（assets/shaders）を実機でSPIR-Vにコンパイルし、
+ * テストシェーダーコーパス（assets/shaders）を実機でSPIR-Vにコンパイルし、
  * リフレクション情報がiOS(swift-slang)側と同じ内容で取れることを検証する。
- * シェーダーはArshesのSlangCompilerと同じくRangeAttribute.slangをprependする。
+ * シェーダーはRangeAttribute.slangをprependしてコンパイルする。
  */
 @RunWith(AndroidJUnit4::class)
 class SlangCompilerTest {

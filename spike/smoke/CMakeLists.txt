@@ -22,7 +22,7 @@ target_compile_definitions(smoke_run PRIVATE SLANG_STATIC)
 target_link_libraries(smoke_run PRIVATE ${SLANG_LIB} log)
 target_link_options(smoke_run PRIVATE -Wl,--gc-sections)
 
-# Corpus compile test (Arshes tests/shaders):
+# Corpus compile test:
 #   adb push corpus_run RangeAttribute.slang *.slang /data/local/tmp/
 #   adb shell 'cd /data/local/tmp && ./corpus_run RangeAttribute.slang <shaders...>'
 add_executable(corpus_run corpus.cpp)
