@@ -9,7 +9,14 @@ BUILD_DIR := $(PROJECT_ROOT)/build
 ANDROID_NDK ?= $(HOME)/Library/Android/sdk/ndk/28.2.13676358
 ANDROID_PLATFORM ?= android-29
 NDK_TOOLCHAIN := $(ANDROID_NDK)/build/cmake/android.toolchain.cmake
-NDK_BIN := $(ANDROID_NDK)/toolchains/llvm/prebuilt/darwin-x86_64/bin
+# NDK host prebuilt tag (darwin-x86_64 on macOS including Apple Silicon, linux-x86_64 on Linux)
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+HOST_TAG := darwin-x86_64
+else
+HOST_TAG := linux-x86_64
+endif
+NDK_BIN := $(ANDROID_NDK)/toolchains/llvm/prebuilt/$(HOST_TAG)/bin
 
 # Colors
 RED := \033[0;31m
