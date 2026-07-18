@@ -1,0 +1,16 @@
+# Build artifacts
+build/
+slang/build-*/
+slang/generators/
+
+# Gradle / Android
+.gradle/
+local.properties
+*.aar
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
