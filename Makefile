@@ -60,7 +60,8 @@ generators:
 			-DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE) \
 			-DSLANG_ENABLE_TESTS=OFF \
 			-DSLANG_ENABLE_EXAMPLES=OFF \
-			-DSLANG_ENABLE_GFX=OFF && \
+			-DSLANG_ENABLE_GFX=OFF \
+			-DSLANG_ENABLE_SLANG_RHI=OFF && \
 		$(NINJA); \
 	fi
 	@echo "$(GREEN)✓ Generators ready$(NC)"
