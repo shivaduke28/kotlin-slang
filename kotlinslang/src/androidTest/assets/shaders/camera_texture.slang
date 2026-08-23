@@ -1,6 +1,5 @@
-// Test: camera_texture
-// Pass-through shader that displays the camera RGB texture unchanged.
-// Expected: the camera image is shown as-is.
+// Covers resource reflection: binding index and space for a texture and a sampler, and
+// the element type of Texture2D<float3>.
 
 uniform Texture2D<float3> cameraTex;
 uniform SamplerState samp;

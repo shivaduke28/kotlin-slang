@@ -1,7 +1,5 @@
-// GPU Particle test
-// Compute shader writes particle positions to RWStructuredBuffer,
-// vertex shader reads them via SV_InstanceID (instanced quads).
-// Expected: ring of colored quads
+// Covers compute, vertex and fragment entry points in one module, and RWStructuredBuffer
+// reflection including the element size behind a [size] attribute.
 
 uniform float time;
 uniform float2 resolution;

@@ -1,6 +1,5 @@
-// RWTexture2D view test
-// Writes to an RWTexture2D from compute, then samples it back through a Texture2D view.
-// Expected: a red-to-black gradient, showing that bilinear filtering is applied.
+// Covers RWTexture2D reflection alongside a read-only view of the same resource, and
+// preprocessor macros substituted into an attribute argument.
 
 [size2d(RESOLUTION_X, RESOLUTION_Y)]
 RWTexture2D<float4> canvasRW;
