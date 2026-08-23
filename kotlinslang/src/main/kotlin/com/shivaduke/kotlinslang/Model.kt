@@ -44,7 +44,7 @@ enum class TypeKind(val raw: String) {
     }
 }
 
-/** スカラ型。ベクタ・行列では要素のスカラ型を指す。 */
+/** Scalar type. For vectors and matrices this is the element's scalar type. */
 enum class ScalarType(val raw: String) {
     Float32("float32"),
     Float16("float16"),
@@ -59,7 +59,7 @@ enum class ScalarType(val raw: String) {
     UInt8("uint8"),
     Bool("bool"),
 
-    /** スカラ型を持たない型（リソース、構造体など）。 */
+    /** Types that have no scalar type, such as resources and structs. */
     None("none");
 
     companion object {
@@ -94,7 +94,11 @@ data class ShaderParameter(
     val size: Int,
     val alignment: Int,
     val elementSize: Int,
-    /** 値型のスカラ型。ベクタ・行列では要素のスカラ型。リソースや構造体では[ScalarType.None]。 */
+    /**
+     * Scalar type of a value parameter; for vectors and matrices, the element's scalar
+     * type. [ScalarType.None] for resources and structs, whose element type is reported
+     * by [resourceResult] instead.
+     */
     val scalar: ScalarType,
     val resourceResult: ResourceResultType?,
     val attributes: List<UserAttribute>,
@@ -106,31 +110,31 @@ data class EntryPoint(
     val name: String,
     val stage: ShaderStage,
     val spirv: ByteArray,
-    /** エントリポイント関数に付いたユーザー属性。意味づけは呼び出し側が行う。 */
+    /** User attributes on the entry point function. Interpreting them is the caller's job. */
     val attributes: List<UserAttribute>,
 ) {
     fun attribute(name: String): UserAttribute? = attributes.firstOrNull { it.name == name }
 }
 
 /**
- * Slangがバラのuniformパラメータ用に暗黙的に生成する定数バッファ。
+ * The constant buffer Slang synthesises for loose uniform parameters.
  *
- * uniformパラメータを1つも宣言しないシェーダーではこの定数バッファ自体が存在せず、
- * [CompileResult.globalConstantBuffer]がnullになる。
+ * A shader that declares no uniform parameters has no such buffer, in which case
+ * [CompileResult.globalConstantBuffer] is null.
  */
 data class GlobalConstantBuffer(
-    /** descriptor set内のbinding番号。 */
+    /** Binding number within the descriptor set. */
     val binding: Int,
-    /** descriptor set番号。 */
+    /** Descriptor set number. */
     val space: Int,
-    /** バイトサイズ。 */
+    /** Size in bytes. */
     val size: Int,
 )
 
 data class CompileResult(
     val entryPoints: List<EntryPoint>,
     val parameters: List<ShaderParameter>,
-    /** uniformパラメータを持たないシェーダーではnull。 */
+    /** Null for shaders that declare no uniform parameters. */
     val globalConstantBuffer: GlobalConstantBuffer?,
     val diagnostics: String,
 )

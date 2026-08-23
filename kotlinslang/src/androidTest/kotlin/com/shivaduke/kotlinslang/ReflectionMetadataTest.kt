@@ -7,8 +7,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * エントリポイントのユーザー属性とパラメータのスカラ型がリフレクションから取れることを
- * 検証する。シェーダーはこのファイル内で完結させる。
+ * Verifies that entry point user attributes and parameter scalar types are available
+ * through reflection. The shaders are inlined so the test is self-contained.
  */
 @RunWith(AndroidJUnit4::class)
 class ReflectionMetadataTest {
@@ -23,7 +23,7 @@ class ReflectionMetadataTest {
         struct scaleAttribute { float value; };
     """.trimIndent()
 
-    /** uniformスカラ/ベクタとリソースを両方持つシェーダー。 */
+    /** Uniform scalars and vectors alongside resources. */
     private val uniformsAndResources = """
         $attributeDecls
 
@@ -65,7 +65,7 @@ class ReflectionMetadataTest {
         val result = compiler.compile(uniformsAndResources)
         val byName = result.entryPoints.associateBy { it.name }
 
-        // [shader] と [numthreads] はビルトインなのでユーザー属性には現れない
+        // [shader] and [numthreads] are builtins and must not appear as user attributes
         assertEquals(emptyList<UserAttribute>(), byName.getValue("computeMain").attributes)
         assertEquals(listOf("topology"), byName.getValue("vertexMain").attributes.map { it.name })
     }
@@ -90,17 +90,17 @@ class ReflectionMetadataTest {
         )
         val byName = result.parameters.associateBy { it.name }
 
-        // 属性が無くても素のスカラ型が区別できる（floatとintを取り違えない）
+        // Bare uniforms are distinguishable without attributes: float is not mistaken for int
         assertEquals(ScalarType.Float32, byName.getValue("brightness").scalar)
         assertEquals(ScalarType.Int32, byName.getValue("iterations").scalar)
         assertEquals(ScalarType.Bool, byName.getValue("enabled").scalar)
 
-        // ベクタでは要素のスカラ型
+        // Vectors report the element's scalar type
         assertEquals(ScalarType.Float32, byName.getValue("tintColor").scalar)
         assertEquals(TypeKind.Vector, byName.getValue("tintColor").kind)
         assertEquals(ScalarType.Int32, byName.getValue("offset").scalar)
 
-        // リソースは値型ではないのでNone。要素型はresourceResult側で見る
+        // Resources are not value types, so None; their element type comes from resourceResult
         assertEquals(ScalarType.None, byName.getValue("tex").scalar)
         assertEquals(ScalarType.Float32, byName.getValue("tex").resourceResult!!.scalar)
     }
