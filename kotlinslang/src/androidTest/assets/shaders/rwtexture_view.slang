@@ -1,6 +1,6 @@
 // RWTexture2D view test
-// RWTexture2D に compute で書き込み、Texture2D ビューで Sample して読む
-// 期待: 赤→黒のグラデーション（バイリニア補間が効いている）
+// Writes to an RWTexture2D from compute, then samples it back through a Texture2D view.
+// Expected: a red-to-black gradient, showing that bilinear filtering is applied.
 
 [size2d(RESOLUTION_X, RESOLUTION_Y)]
 RWTexture2D<float4> canvasRW;

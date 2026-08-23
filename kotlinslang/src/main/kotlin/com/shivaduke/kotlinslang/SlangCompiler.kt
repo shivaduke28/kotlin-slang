@@ -4,17 +4,18 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * SlangソースをSPIR-Vにコンパイルする。
+ * Compiles Slang source to SPIR-V.
  *
- * Slangのglobal sessionはスレッドセーフではないため、このクラスの利用は
- * 単一スレッド（またはアプリ側での直列化）を前提とする。
+ * Slang's global session is not thread-safe, so this class must be used from a single
+ * thread, or calls must be serialized by the application.
  */
 class SlangCompiler {
 
     /**
-     * [source]をコンパイルし、全エントリポイントのSPIR-Vとリフレクション情報を返す。
+     * Compiles [source] and returns the SPIR-V for every entry point along with the
+     * reflection data.
      *
-     * @throws SlangCompileException コンパイル失敗時（診断メッセージ付き）
+     * @throws SlangCompileException on compilation failure, carrying Slang diagnostics
      */
     fun compile(source: String, macros: Map<String, String> = emptyMap()): CompileResult {
         val result = nativeCompile(

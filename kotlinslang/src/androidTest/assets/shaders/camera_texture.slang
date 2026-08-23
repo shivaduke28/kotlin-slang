@@ -1,6 +1,6 @@
 // Test: camera_texture
-// カメラRGBテクスチャをそのまま表示するパススルーシェーダー
-// 期待: カメラ映像がそのまま表示される
+// Pass-through shader that displays the camera RGB texture unchanged.
+// Expected: the camera image is shown as-is.
 
 uniform Texture2D<float3> cameraTex;
 uniform SamplerState samp;

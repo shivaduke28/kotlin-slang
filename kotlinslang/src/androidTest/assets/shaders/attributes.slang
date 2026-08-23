@@ -1,6 +1,6 @@
 // Test: attributes
-// rangeAttribute, rgbAttribute, toggleAttributeのパラメータ定義をテスト
-// 期待: コンパイルが成功すればOK
+// Exercises parameter declarations using rangeAttribute, rgbAttribute and toggleAttribute.
+// Expected: compiling successfully is the whole test.
 
 [range(0.0, 1.0, 0.5)]
 uniform float brightness;

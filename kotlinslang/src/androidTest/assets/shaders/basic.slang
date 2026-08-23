@@ -1,6 +1,6 @@
 // Test: basic
-// 最小構成のシェーダー。UVをそのまま色に出力する。
-// 期待: 左下が黒、右上が黄色のグラデーション
+// Minimal shader: writes the UV straight out as colour.
+// Expected: a gradient from black at the bottom left to yellow at the top right.
 
 [shader("fragment")]
 float4 fragmentMain(float2 uv : TEXCOORD) : SV_Target {

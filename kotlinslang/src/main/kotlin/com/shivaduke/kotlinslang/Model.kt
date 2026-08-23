@@ -11,7 +11,10 @@ enum class ShaderStage(val raw: Int) {
     }
 }
 
-/** Slangリフレクションのパラメータカテゴリ。SPIR-Vターゲットではリソースはすべて[DescriptorTableSlot]になる。 */
+/**
+ * Parameter category reported by Slang reflection. On the SPIR-V target every resource
+ * is a [DescriptorTableSlot].
+ */
 enum class ParameterCategory(val raw: String) {
     Uniform("uniform"),
     ConstantBuffer("constantBuffer"),
@@ -67,7 +70,7 @@ enum class ScalarType(val raw: String) {
     }
 }
 
-/** `[range(min, max, default)]` のようなユーザー属性。引数は数値または文字列。 */
+/** A user attribute such as `[range(min, max, default)]`. Arguments are numbers or strings. */
 data class UserAttribute(
     val name: String,
     val args: List<Any>,
@@ -76,7 +79,7 @@ data class UserAttribute(
     fun intArg(index: Int): Int? = (args.getOrNull(index) as? Number)?.toInt()
 }
 
-/** リソース型（Texture2D<T>等）の要素型情報。 */
+/** Element type of a resource type such as `Texture2D<T>`. */
 data class ResourceResultType(
     val kind: TypeKind,
     val components: Int,
@@ -87,7 +90,7 @@ data class ShaderParameter(
     val name: String,
     val category: ParameterCategory,
     val bindingIndex: Int,
-    /** Vulkanのdescriptor set番号。 */
+    /** Vulkan descriptor set number. */
     val bindingSpace: Int,
     val uniformOffset: Int,
     val kind: TypeKind,
