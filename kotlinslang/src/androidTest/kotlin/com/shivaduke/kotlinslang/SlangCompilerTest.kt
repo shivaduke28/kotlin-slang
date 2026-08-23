@@ -8,9 +8,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * テストシェーダーコーパス（assets/shaders）を実機でSPIR-Vにコンパイルし、
- * リフレクション情報がiOS(swift-slang)側と同じ内容で取れることを検証する。
- * シェーダーはRangeAttribute.slangをprependしてコンパイルする。
+ * Compiles the shader corpus in assets/shaders to SPIR-V on device and verifies that the
+ * reflection data matches what swift-slang reports on iOS. RangeAttribute.slang is
+ * prepended to each shader before compiling.
  */
 @RunWith(AndroidJUnit4::class)
 class SlangCompilerTest {

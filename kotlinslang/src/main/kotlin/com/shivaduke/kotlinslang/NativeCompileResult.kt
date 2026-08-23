@@ -1,6 +1,9 @@
 package com.shivaduke.kotlinslang
 
-/** JNI境界の生の戻り値。[json]はリフレクション情報、[spirv]はエントリポイントごとのSPIR-V。 */
+/**
+ * Raw return value from the JNI boundary. [json] carries the reflection data and [spirv]
+ * holds one SPIR-V blob per entry point.
+ */
 internal class NativeCompileResult(
     @JvmField val json: String,
     @JvmField val spirv: Array<ByteArray>,

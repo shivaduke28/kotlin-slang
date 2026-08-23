@@ -1,7 +1,5 @@
-// Blend mode test
-// Pass 0: solid background (no blending)
-// Pass 1: semi-transparent circle with alpha blending
-// Expected: orange circle blended over blue background
+// Covers two fragment entry points in one module, and entry point attributes whose
+// argument is an enum value.
 
 struct VertexOutput {
     float4 position : SV_Position;

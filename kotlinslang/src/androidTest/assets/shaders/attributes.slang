@@ -1,6 +1,5 @@
-// Test: attributes
-// rangeAttribute, rgbAttribute, toggleAttributeのパラメータ定義をテスト
-// 期待: コンパイルが成功すればOK
+// Covers parameter user attributes with int, float and bool arguments, and the std140
+// offset/size/alignment of loose uniform scalars and vectors.
 
 [range(0.0, 1.0, 0.5)]
 uniform float brightness;

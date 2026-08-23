@@ -1,6 +1,5 @@
-// Test: camera_texture
-// カメラRGBテクスチャをそのまま表示するパススルーシェーダー
-// 期待: カメラ映像がそのまま表示される
+// Covers resource reflection: binding index and space for a texture and a sampler, and
+// the element type of Texture2D<float3>.
 
 uniform Texture2D<float3> cameraTex;
 uniform SamplerState samp;

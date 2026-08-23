@@ -315,7 +315,8 @@ jobject makeError(JNIEnv* env, const char* stage, const char* diagnostics)
     return makeResult(env, json, {});
 }
 
-// Slang global session is not thread-safe; Kotlin側で単一スレッドから呼ぶ前提。
+// The Slang global session is not thread-safe; callers on the Kotlin side are expected
+// to invoke this from a single thread.
 slang::IGlobalSession* globalSession()
 {
     static Slang::ComPtr<slang::IGlobalSession> session = [] {

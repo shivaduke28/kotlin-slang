@@ -116,7 +116,7 @@ static void dumpParameter(slang::VariableLayoutReflection* param, const char* in
                 std::printf(" elemSize=%zu", elementSize);
         }
 
-        // RWTexture2D<T> / Texture2D<T> の T
+        // The T in RWTexture2D<T> / Texture2D<T>
         if (typeLayout->getKind() == slang::TypeReflection::Kind::Resource)
         {
             if (slang::TypeReflection* result = typeLayout->getType()->getResourceResultType())
@@ -235,13 +235,13 @@ int main(int argc, char** argv)
             continue;
         }
 
-        // iOS側のextractParameters相当: グローバルパラメータの一覧
+        // Global parameter list, matching the host-side parameter extraction
         const unsigned paramCount = layout->getParameterCount();
         std::printf("global parameters: %u\n", paramCount);
         for (unsigned p = 0; p < paramCount; p++)
             dumpParameter(layout->getParameterByIndex(p), "  ");
 
-        // グローバルuniformをまとめたバッファのレイアウト
+        // Layout of the buffer holding the global uniforms
         if (slang::TypeLayoutReflection* globals = layout->getGlobalParamsTypeLayout())
         {
             std::printf(
@@ -250,7 +250,7 @@ int main(int argc, char** argv)
                 globals->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM));
         }
 
-        // エントリポイント一覧
+        // Entry point list
         const SlangUInt epCount = layout->getEntryPointCount();
         for (SlangUInt e = 0; e < epCount; e++)
         {

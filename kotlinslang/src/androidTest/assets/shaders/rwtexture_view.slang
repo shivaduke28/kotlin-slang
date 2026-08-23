@@ -1,6 +1,5 @@
-// RWTexture2D view test
-// RWTexture2D に compute で書き込み、Texture2D ビューで Sample して読む
-// 期待: 赤→黒のグラデーション（バイリニア補間が効いている）
+// Covers RWTexture2D reflection alongside a read-only view of the same resource, and
+// preprocessor macros substituted into an attribute argument.
 
 [size2d(RESOLUTION_X, RESOLUTION_Y)]
 RWTexture2D<float4> canvasRW;
