@@ -238,12 +238,12 @@ void appendParameter(std::string& json, slang::VariableLayoutReflection* param)
 // or null when the shader declares none. Returns a diagnostic message when the
 // size cannot be resolved, in which case nothing is appended.
 //
-// ProgramLayout::getGlobalConstantBufferBinding() is unusable here: it looks up
-// LayoutResourceKind::ConstantBuffer, but the GLSL/SPIR-V layout rules map
-// constant buffers to DescriptorTableSlot, so the lookup always misses and the
-// function returns 0 regardless of the real binding. The global params var
-// layout is the same path appendParameter() already uses for ordinary
-// parameters, and it also carries the descriptor set number.
+// The binding comes from the global params var layout, which is the path
+// appendParameter() already uses for ordinary parameters and which also carries
+// the descriptor set number. ProgramLayout::getGlobalConstantBufferBinding()
+// does not work on this target: it looks up LayoutResourceKind::ConstantBuffer,
+// the GLSL/SPIR-V layout rules map constant buffers to DescriptorTableSlot, so
+// the lookup always misses and it returns 0 regardless of the real binding.
 const char* appendGlobalConstantBuffer(std::string& json, slang::ProgramLayout* layout)
 {
     slang::TypeLayoutReflection* globalsType = layout->getGlobalParamsTypeLayout();

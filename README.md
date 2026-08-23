@@ -71,18 +71,18 @@ val topology = result.entryPoints.first().attribute("topology")
 topology?.intArg(0)
 ```
 
-### Consuming the SPIR-V from Vulkan
+### Requirements for Vulkan pipeline creation
 
-Two properties of the emitted modules are easy to get wrong, and both surface as
-`VK_ERROR_INITIALIZATION_FAILED` from `vkCreateGraphicsPipelines` with no other
-clue unless the validation layers are enabled:
+- `VkPipelineShaderStageCreateInfo::pName` must be `"main"`. Entry point names
+  are normalised to `main` in the emitted SPIR-V; the original function name is
+  not preserved. The name reported by reflection selects which entry point's
+  SPIR-V to load, and is not a valid `pName`.
+- The Vulkan instance must be created with `VkApplicationInfo::apiVersion` of
+  1.2 or higher, because the output targets SPIR-V 1.5.
 
-- **Entry point names are normalised to `main`.** The original function name is
-  not preserved in the SPIR-V, so `VkPipelineShaderStageCreateInfo::pName` must
-  be `"main"`, not the name reported by reflection. Use the reflection name to
-  pick *which* entry point's SPIR-V to load, not as `pName`.
-- **The output targets SPIR-V 1.5**, which requires a Vulkan 1.2 instance.
-  Setting `VkApplicationInfo::apiVersion` to 1.1 fails pipeline creation.
+Violating either returns `VK_ERROR_INITIALIZATION_FAILED` from
+`vkCreateGraphicsPipelines`, with no further diagnostic unless the validation
+layers are enabled.
 
 Compilation failures throw `SlangCompileException` with Slang diagnostics.
 
