@@ -81,11 +81,28 @@ data class EntryPoint(
     val name: String,
     val stage: ShaderStage,
     val spirv: ByteArray,
+    /** エントリポイント関数に付いたユーザー属性。意味づけは呼び出し側が行う。 */
+    val attributes: List<UserAttribute>,
+) {
+    fun attribute(name: String): UserAttribute? = attributes.firstOrNull { it.name == name }
+}
+
+/**
+ * Slangがバラのuniformパラメータ用に暗黙的に生成する定数バッファ。
+ *
+ * [binding]と[size]は、Slangが値を解決できない場合（未解決のジェネリックパラメータや
+ * link-time定数に依存する場合）にnullになる。[size]が0のときはuniformパラメータが1つもなく、
+ * この定数バッファは存在しない。
+ */
+data class GlobalConstantBuffer(
+    val binding: Int?,
+    val size: Int?,
 )
 
 data class CompileResult(
     val entryPoints: List<EntryPoint>,
     val parameters: List<ShaderParameter>,
+    val globalConstantBuffer: GlobalConstantBuffer,
     val diagnostics: String,
 )
 

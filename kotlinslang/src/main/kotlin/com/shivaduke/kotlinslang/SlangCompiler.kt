@@ -36,6 +36,7 @@ class SlangCompiler {
                 name = ep.getString("name"),
                 stage = ShaderStage.from(ep.getInt("stage")),
                 spirv = result.spirv[ep.getInt("spirvIndex")],
+                attributes = parseAttributes(ep.getJSONArray("attributes")),
             )
         }
 
@@ -57,21 +58,29 @@ class SlangCompiler {
                         scalar = r.getString("scalar"),
                     )
                 },
-                attributes = p.getJSONArray("attributes").map { a ->
-                    UserAttribute(
-                        name = a.getString("name"),
-                        args = a.getJSONArray("args").let { args ->
-                            (0 until args.length()).map { args.get(it) }
-                        },
-                    )
-                },
+                attributes = parseAttributes(p.getJSONArray("attributes")),
             )
         }
+
+        val globalCb = json.getJSONObject("globalConstantBuffer")
 
         return CompileResult(
             entryPoints = entryPoints,
             parameters = parameters,
+            globalConstantBuffer = GlobalConstantBuffer(
+                binding = if (globalCb.isNull("binding")) null else globalCb.getInt("binding"),
+                size = if (globalCb.isNull("size")) null else globalCb.getInt("size"),
+            ),
             diagnostics = json.optString("diagnostics", ""),
+        )
+    }
+
+    private fun parseAttributes(array: JSONArray): List<UserAttribute> = array.map { a ->
+        UserAttribute(
+            name = a.getString("name"),
+            args = a.getJSONArray("args").let { args ->
+                (0 until args.length()).map { args.get(it) }
+            },
         )
     }
 

@@ -107,15 +107,19 @@ const char* scalarName(slang::TypeReflection::ScalarType s)
     }
 }
 
-void appendUserAttributes(std::string& json, slang::VariableReflection* var)
+// Works for any reflection object exposing getUserAttributeCount() /
+// getUserAttributeByIndex(): VariableReflection (parameters) and
+// FunctionReflection (entry points).
+template<typename Owner>
+void appendUserAttributes(std::string& json, Owner* owner)
 {
     json += "\"attributes\":[";
-    if (var)
+    if (owner)
     {
-        const unsigned count = var->getUserAttributeCount();
+        const unsigned count = owner->getUserAttributeCount();
         for (unsigned a = 0; a < count; a++)
         {
-            slang::Attribute* attr = var->getUserAttributeByIndex(a);
+            slang::Attribute* attr = owner->getUserAttributeByIndex(a);
             if (!attr)
                 continue;
             if (a > 0)
@@ -206,6 +210,27 @@ void appendParameter(std::string& json, slang::VariableLayoutReflection* param)
     }
     json += ',';
     appendUserAttributes(json, param->getVariable());
+    json += '}';
+}
+
+// The implicit constant buffer Slang synthesises for loose uniform parameters.
+// binding/size are emitted as null when Slang reports them as unknown or
+// unbounded; a size of 0 means the shader declares no uniform parameters.
+void appendGlobalConstantBuffer(std::string& json, slang::ProgramLayout* layout)
+{
+    json += "\"globalConstantBuffer\":{\"binding\":";
+    const SlangUInt binding = layout->getGlobalConstantBufferBinding();
+    if (binding == SLANG_UNKNOWN_SIZE || binding == SLANG_UNBOUNDED_SIZE)
+        json += "null";
+    else
+        json += std::to_string(binding);
+
+    json += ",\"size\":";
+    const size_t size = layout->getGlobalConstantBufferSize();
+    if (size == SLANG_UNKNOWN_SIZE || size == SLANG_UNBOUNDED_SIZE)
+        json += "null";
+    else
+        json += std::to_string(size);
     json += '}';
 }
 
@@ -381,10 +406,15 @@ Java_com_shivaduke_kotlinslang_SlangCompiler_nativeCompile(
         appendString(json, "name", ep ? ep->getName() : "");
         json += ",\"stage\":" + std::to_string(ep ? (int)ep->getStage() : 0);
         json += ",\"spirvIndex\":" + std::to_string(blobs.size());
+        json += ',';
+        appendUserAttributes(json, ep ? ep->getFunction() : nullptr);
         json += '}';
         blobs.push_back(code);
     }
     json += ']';
+
+    json += ',';
+    appendGlobalConstantBuffer(json, layout);
 
     json += ",\"parameters\":[";
     const unsigned paramCount = layout->getParameterCount();

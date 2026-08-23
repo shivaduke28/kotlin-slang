@@ -53,9 +53,19 @@ dependencies {
 val compiler = SlangCompiler()
 val result = compiler.compile(source, macros = mapOf("RESOLUTION_X" to "1920"))
 
-result.entryPoints  // name, stage, SPIR-V bytes per entry point
+result.entryPoints  // name, stage, SPIR-V bytes and user attributes per entry point
 result.parameters   // name, category, binding index/space, uniform offset,
                     // size/alignment, resource element type, user attributes
+result.globalConstantBuffer  // binding and byte size of the implicit constant
+                             // buffer Slang synthesises for loose uniforms
+```
+
+User attributes are surfaced as raw name/argument pairs on both parameters and
+entry points; interpreting them is the host application's job.
+
+```kotlin
+val topology = result.entryPoints.first().attribute("topology")
+topology?.intArg(0)
 ```
 
 Compilation failures throw `SlangCompileException` with Slang diagnostics.
