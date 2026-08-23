@@ -51,26 +51,30 @@ class SlangCompiler {
                 size = p.optInt("size", 0),
                 alignment = p.optInt("alignment", 0),
                 elementSize = p.optInt("elementSize", 0),
+                scalar = ScalarType.from(p.optString("scalar", "none")),
                 resourceResult = p.optJSONObject("resourceResult")?.let { r ->
                     ResourceResultType(
                         kind = TypeKind.from(r.getString("kind")),
                         components = r.getInt("components"),
-                        scalar = r.getString("scalar"),
+                        scalar = ScalarType.from(r.getString("scalar")),
                     )
                 },
                 attributes = parseAttributes(p.getJSONArray("attributes")),
             )
         }
 
-        val globalCb = json.getJSONObject("globalConstantBuffer")
+        val globalCb = json.optJSONObject("globalConstantBuffer")?.let { cb ->
+            GlobalConstantBuffer(
+                binding = cb.getInt("binding"),
+                space = cb.getInt("space"),
+                size = cb.getInt("size"),
+            )
+        }
 
         return CompileResult(
             entryPoints = entryPoints,
             parameters = parameters,
-            globalConstantBuffer = GlobalConstantBuffer(
-                binding = if (globalCb.isNull("binding")) null else globalCb.getInt("binding"),
-                size = if (globalCb.isNull("size")) null else globalCb.getInt("size"),
-            ),
+            globalConstantBuffer = globalCb,
             diagnostics = json.optString("diagnostics", ""),
         )
     }

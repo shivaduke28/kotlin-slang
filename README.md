@@ -55,9 +55,12 @@ val result = compiler.compile(source, macros = mapOf("RESOLUTION_X" to "1920"))
 
 result.entryPoints  // name, stage, SPIR-V bytes and user attributes per entry point
 result.parameters   // name, category, binding index/space, uniform offset,
-                    // size/alignment, resource element type, user attributes
-result.globalConstantBuffer  // binding and byte size of the implicit constant
-                             // buffer Slang synthesises for loose uniforms
+                    // size/alignment, scalar type, resource element type,
+                    // user attributes
+result.globalConstantBuffer  // binding, descriptor set and byte size of the
+                             // implicit constant buffer Slang synthesises for
+                             // loose uniform parameters, or null when the
+                             // shader declares none
 ```
 
 User attributes are surfaced as raw name/argument pairs on both parameters and
@@ -67,6 +70,19 @@ entry points; interpreting them is the host application's job.
 val topology = result.entryPoints.first().attribute("topology")
 topology?.intArg(0)
 ```
+
+### Consuming the SPIR-V from Vulkan
+
+Two properties of the emitted modules are easy to get wrong, and both surface as
+`VK_ERROR_INITIALIZATION_FAILED` from `vkCreateGraphicsPipelines` with no other
+clue unless the validation layers are enabled:
+
+- **Entry point names are normalised to `main`.** The original function name is
+  not preserved in the SPIR-V, so `VkPipelineShaderStageCreateInfo::pName` must
+  be `"main"`, not the name reported by reflection. Use the reflection name to
+  pick *which* entry point's SPIR-V to load, not as `pName`.
+- **The output targets SPIR-V 1.5**, which requires a Vulkan 1.2 instance.
+  Setting `VkApplicationInfo::apiVersion` to 1.1 fails pipeline creation.
 
 Compilation failures throw `SlangCompileException` with Slang diagnostics.
 

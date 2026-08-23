@@ -44,6 +44,29 @@ enum class TypeKind(val raw: String) {
     }
 }
 
+/** スカラ型。ベクタ・行列では要素のスカラ型を指す。 */
+enum class ScalarType(val raw: String) {
+    Float32("float32"),
+    Float16("float16"),
+    Float64("float64"),
+    Int32("int32"),
+    UInt32("uint32"),
+    Int64("int64"),
+    UInt64("uint64"),
+    Int16("int16"),
+    UInt16("uint16"),
+    Int8("int8"),
+    UInt8("uint8"),
+    Bool("bool"),
+
+    /** スカラ型を持たない型（リソース、構造体など）。 */
+    None("none");
+
+    companion object {
+        fun from(raw: String): ScalarType = entries.firstOrNull { it.raw == raw } ?: None
+    }
+}
+
 /** `[range(min, max, default)]` のようなユーザー属性。引数は数値または文字列。 */
 data class UserAttribute(
     val name: String,
@@ -57,7 +80,7 @@ data class UserAttribute(
 data class ResourceResultType(
     val kind: TypeKind,
     val components: Int,
-    val scalar: String,
+    val scalar: ScalarType,
 )
 
 data class ShaderParameter(
@@ -71,6 +94,8 @@ data class ShaderParameter(
     val size: Int,
     val alignment: Int,
     val elementSize: Int,
+    /** 値型のスカラ型。ベクタ・行列では要素のスカラ型。リソースや構造体では[ScalarType.None]。 */
+    val scalar: ScalarType,
     val resourceResult: ResourceResultType?,
     val attributes: List<UserAttribute>,
 ) {
@@ -90,19 +115,23 @@ data class EntryPoint(
 /**
  * Slangがバラのuniformパラメータ用に暗黙的に生成する定数バッファ。
  *
- * [binding]と[size]は、Slangが値を解決できない場合（未解決のジェネリックパラメータや
- * link-time定数に依存する場合）にnullになる。[size]が0のときはuniformパラメータが1つもなく、
- * この定数バッファは存在しない。
+ * uniformパラメータを1つも宣言しないシェーダーではこの定数バッファ自体が存在せず、
+ * [CompileResult.globalConstantBuffer]がnullになる。
  */
 data class GlobalConstantBuffer(
-    val binding: Int?,
-    val size: Int?,
+    /** descriptor set内のbinding番号。 */
+    val binding: Int,
+    /** descriptor set番号。 */
+    val space: Int,
+    /** バイトサイズ。 */
+    val size: Int,
 )
 
 data class CompileResult(
     val entryPoints: List<EntryPoint>,
     val parameters: List<ShaderParameter>,
-    val globalConstantBuffer: GlobalConstantBuffer,
+    /** uniformパラメータを持たないシェーダーではnull。 */
+    val globalConstantBuffer: GlobalConstantBuffer?,
     val diagnostics: String,
 )
 

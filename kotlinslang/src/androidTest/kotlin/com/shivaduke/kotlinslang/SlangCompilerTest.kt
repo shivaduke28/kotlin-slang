@@ -90,7 +90,7 @@ class SlangCompilerTest {
         assertEquals(0, cameraTex.bindingSpace)
         assertEquals(TypeKind.Resource, cameraTex.kind)
         assertEquals(3, cameraTex.resourceResult!!.components)
-        assertEquals("float32", cameraTex.resourceResult!!.scalar)
+        assertEquals(ScalarType.Float32, cameraTex.resourceResult!!.scalar)
 
         val samp = result.parameters.first { it.name == "samp" }
         assertEquals(TypeKind.SamplerState, samp.kind)

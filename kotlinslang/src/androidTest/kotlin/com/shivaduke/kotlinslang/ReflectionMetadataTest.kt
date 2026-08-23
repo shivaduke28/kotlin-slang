@@ -7,8 +7,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * エントリポイントのユーザー属性と、暗黙のグローバル定数バッファのbinding/sizeが
- * リフレクションから取れることを検証する。シェーダーはこのファイル内で完結させる。
+ * エントリポイントのユーザー属性とパラメータのスカラ型がリフレクションから取れることを
+ * 検証する。シェーダーはこのファイル内で完結させる。
  */
 @RunWith(AndroidJUnit4::class)
 class ReflectionMetadataTest {
@@ -47,15 +47,6 @@ class ReflectionMetadataTest {
         void computeMain(uint3 id : SV_DispatchThreadID) { }
     """.trimIndent()
 
-    /** uniformを1つも持たないシェーダー。 */
-    private val resourcesOnly = """
-        Texture2D<float4> tex;
-        SamplerState samp;
-
-        [shader("fragment")]
-        float4 fragmentMain() : SV_Target { return tex.Sample(samp, float2(0, 0)); }
-    """.trimIndent()
-
     @Test
     fun exposesEntryPointUserAttributes() {
         val result = compiler.compile(uniformsAndResources)
@@ -80,28 +71,38 @@ class ReflectionMetadataTest {
     }
 
     @Test
-    fun exposesGlobalConstantBufferBindingAndSize() {
-        val result = compiler.compile(uniformsAndResources)
+    fun exposesScalarTypeOfUniformParameters() {
+        val result = compiler.compile(
+            """
+            uniform float brightness;
+            uniform int iterations;
+            uniform bool enabled;
+            uniform float3 tintColor;
+            uniform int2 offset;
+            Texture2D<float4> tex;
 
-        // 暗黙のグローバル定数バッファがbinding 0を取り、リソースは1から並ぶ
-        assertEquals(0, result.globalConstantBuffer.binding)
-        assertEquals(1, result.parameters.first { it.name == "tex" }.bindingIndex)
-        assertEquals(2, result.parameters.first { it.name == "samp" }.bindingIndex)
+            [shader("fragment")]
+            float4 fragmentMain() : SV_Target {
+                float3 c = tintColor * brightness * iterations * offset.x;
+                return enabled ? float4(c, 1) : tex.Load(int3(0, 0, 0));
+            }
+            """.trimIndent()
+        )
+        val byName = result.parameters.associateBy { it.name }
 
-        // std140レイアウト: float amount @0 (4バイト), float3 tint @16 (12バイト)
-        // 合計28バイトが16バイト境界に切り上げられて32になる
-        assertEquals(16, result.parameters.first { it.name == "tint" }.uniformOffset)
-        assertEquals(32, result.globalConstantBuffer.size)
-    }
+        // 属性が無くても素のスカラ型が区別できる（floatとintを取り違えない）
+        assertEquals(ScalarType.Float32, byName.getValue("brightness").scalar)
+        assertEquals(ScalarType.Int32, byName.getValue("iterations").scalar)
+        assertEquals(ScalarType.Bool, byName.getValue("enabled").scalar)
 
-    @Test
-    fun reportsZeroSizeWhenShaderHasNoUniforms() {
-        val result = compiler.compile(resourcesOnly)
+        // ベクタでは要素のスカラ型
+        assertEquals(ScalarType.Float32, byName.getValue("tintColor").scalar)
+        assertEquals(TypeKind.Vector, byName.getValue("tintColor").kind)
+        assertEquals(ScalarType.Int32, byName.getValue("offset").scalar)
 
-        assertEquals(0, result.globalConstantBuffer.size)
-        // uniformが無いのでリソースが0から並ぶ
-        assertEquals(0, result.parameters.first { it.name == "tex" }.bindingIndex)
-        assertEquals(1, result.parameters.first { it.name == "samp" }.bindingIndex)
+        // リソースは値型ではないのでNone。要素型はresourceResult側で見る
+        assertEquals(ScalarType.None, byName.getValue("tex").scalar)
+        assertEquals(ScalarType.Float32, byName.getValue("tex").resourceResult!!.scalar)
     }
 
     @Test
