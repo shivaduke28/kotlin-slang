@@ -36,6 +36,7 @@ class SlangCompiler {
                 name = ep.getString("name"),
                 stage = ShaderStage.from(ep.getInt("stage")),
                 spirv = result.spirv[ep.getInt("spirvIndex")],
+                attributes = parseAttributes(ep.getJSONArray("attributes")),
             )
         }
 
@@ -50,28 +51,40 @@ class SlangCompiler {
                 size = p.optInt("size", 0),
                 alignment = p.optInt("alignment", 0),
                 elementSize = p.optInt("elementSize", 0),
+                scalar = ScalarType.from(p.optString("scalar", "none")),
                 resourceResult = p.optJSONObject("resourceResult")?.let { r ->
                     ResourceResultType(
                         kind = TypeKind.from(r.getString("kind")),
                         components = r.getInt("components"),
-                        scalar = r.getString("scalar"),
+                        scalar = ScalarType.from(r.getString("scalar")),
                     )
                 },
-                attributes = p.getJSONArray("attributes").map { a ->
-                    UserAttribute(
-                        name = a.getString("name"),
-                        args = a.getJSONArray("args").let { args ->
-                            (0 until args.length()).map { args.get(it) }
-                        },
-                    )
-                },
+                attributes = parseAttributes(p.getJSONArray("attributes")),
+            )
+        }
+
+        val globalCb = json.optJSONObject("globalConstantBuffer")?.let { cb ->
+            GlobalConstantBuffer(
+                binding = cb.getInt("binding"),
+                space = cb.getInt("space"),
+                size = cb.getInt("size"),
             )
         }
 
         return CompileResult(
             entryPoints = entryPoints,
             parameters = parameters,
+            globalConstantBuffer = globalCb,
             diagnostics = json.optString("diagnostics", ""),
+        )
+    }
+
+    private fun parseAttributes(array: JSONArray): List<UserAttribute> = array.map { a ->
+        UserAttribute(
+            name = a.getString("name"),
+            args = a.getJSONArray("args").let { args ->
+                (0 until args.length()).map { args.get(it) }
+            },
         )
     }
 

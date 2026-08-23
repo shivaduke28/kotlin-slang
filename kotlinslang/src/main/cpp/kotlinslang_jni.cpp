@@ -107,15 +107,37 @@ const char* scalarName(slang::TypeReflection::ScalarType s)
     }
 }
 
-void appendUserAttributes(std::string& json, slang::VariableReflection* var)
+// Scalar type behind a value type: the type itself for scalars, the element type
+// for vectors and matrices, "none" for anything else (resources, structs, ...).
+const char* scalarNameOf(slang::TypeReflection* type)
+{
+    if (!type)
+        return "none";
+    using K = slang::TypeReflection::Kind;
+    const K kind = type->getKind();
+    if (kind == K::Vector || kind == K::Matrix)
+    {
+        slang::TypeReflection* element = type->getElementType();
+        return element ? scalarName(element->getScalarType()) : "none";
+    }
+    if (kind == K::Scalar)
+        return scalarName(type->getScalarType());
+    return "none";
+}
+
+// Works for any reflection object exposing getUserAttributeCount() /
+// getUserAttributeByIndex(): VariableReflection (parameters) and
+// FunctionReflection (entry points).
+template<typename Owner>
+void appendUserAttributes(std::string& json, Owner* owner)
 {
     json += "\"attributes\":[";
-    if (var)
+    if (owner)
     {
-        const unsigned count = var->getUserAttributeCount();
+        const unsigned count = owner->getUserAttributeCount();
         for (unsigned a = 0; a < count; a++)
         {
-            slang::Attribute* attr = var->getUserAttributeByIndex(a);
+            slang::Attribute* attr = owner->getUserAttributeByIndex(a);
             if (!attr)
                 continue;
             if (a > 0)
@@ -186,6 +208,9 @@ void appendParameter(std::string& json, slang::VariableLayoutReflection* param)
             elementSize = element->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM);
         json += ",\"elementSize\":" + std::to_string(elementSize);
 
+        json += ',';
+        appendString(json, "scalar", scalarNameOf(typeLayout->getType()));
+
         if (typeLayout->getKind() == slang::TypeReflection::Kind::Resource)
         {
             if (slang::TypeReflection* result = typeLayout->getType()->getResourceResultType())
@@ -207,6 +232,40 @@ void appendParameter(std::string& json, slang::VariableLayoutReflection* param)
     json += ',';
     appendUserAttributes(json, param->getVariable());
     json += '}';
+}
+
+// The implicit constant buffer Slang synthesises for loose uniform parameters,
+// or null when the shader declares none. Returns a diagnostic message when the
+// size cannot be resolved, in which case nothing is appended.
+//
+// The binding comes from the global params var layout, which is the path
+// appendParameter() already uses for ordinary parameters and which also carries
+// the descriptor set number. ProgramLayout::getGlobalConstantBufferBinding()
+// does not work on this target: it looks up LayoutResourceKind::ConstantBuffer,
+// the GLSL/SPIR-V layout rules map constant buffers to DescriptorTableSlot, so
+// the lookup always misses and it returns 0 regardless of the real binding.
+const char* appendGlobalConstantBuffer(std::string& json, slang::ProgramLayout* layout)
+{
+    slang::TypeLayoutReflection* globalsType = layout->getGlobalParamsTypeLayout();
+    slang::VariableLayoutReflection* globalsVar = layout->getGlobalParamsVarLayout();
+    const bool hasConstantBuffer =
+        globalsType && globalsType->getKind() == slang::TypeReflection::Kind::ConstantBuffer;
+    if (!hasConstantBuffer || !globalsVar)
+    {
+        json += "\"globalConstantBuffer\":null";
+        return nullptr;
+    }
+
+    const size_t size = layout->getGlobalConstantBufferSize();
+    if (size == SLANG_UNKNOWN_SIZE || size == SLANG_UNBOUNDED_SIZE)
+        return "global constant buffer size is unbounded or could not be resolved";
+
+    json += "\"globalConstantBuffer\":{\"binding\":" +
+        std::to_string(globalsVar->getBindingIndex());
+    json += ",\"space\":" + std::to_string(globalsVar->getBindingSpace());
+    json += ",\"size\":" + std::to_string(size);
+    json += '}';
+    return nullptr;
 }
 
 std::string toStdString(JNIEnv* env, jstring s)
@@ -381,10 +440,16 @@ Java_com_shivaduke_kotlinslang_SlangCompiler_nativeCompile(
         appendString(json, "name", ep ? ep->getName() : "");
         json += ",\"stage\":" + std::to_string(ep ? (int)ep->getStage() : 0);
         json += ",\"spirvIndex\":" + std::to_string(blobs.size());
+        json += ',';
+        appendUserAttributes(json, ep ? ep->getFunction() : nullptr);
         json += '}';
         blobs.push_back(code);
     }
     json += ']';
+
+    json += ',';
+    if (const char* globalCbError = appendGlobalConstantBuffer(json, layout))
+        return makeError(env, "layout", globalCbError);
 
     json += ",\"parameters\":[";
     const unsigned paramCount = layout->getParameterCount();

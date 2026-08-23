@@ -44,6 +44,29 @@ enum class TypeKind(val raw: String) {
     }
 }
 
+/** Scalar type. For vectors and matrices this is the element's scalar type. */
+enum class ScalarType(val raw: String) {
+    Float32("float32"),
+    Float16("float16"),
+    Float64("float64"),
+    Int32("int32"),
+    UInt32("uint32"),
+    Int64("int64"),
+    UInt64("uint64"),
+    Int16("int16"),
+    UInt16("uint16"),
+    Int8("int8"),
+    UInt8("uint8"),
+    Bool("bool"),
+
+    /** Types that have no scalar type, such as resources and structs. */
+    None("none");
+
+    companion object {
+        fun from(raw: String): ScalarType = entries.firstOrNull { it.raw == raw } ?: None
+    }
+}
+
 /** `[range(min, max, default)]` のようなユーザー属性。引数は数値または文字列。 */
 data class UserAttribute(
     val name: String,
@@ -57,7 +80,7 @@ data class UserAttribute(
 data class ResourceResultType(
     val kind: TypeKind,
     val components: Int,
-    val scalar: String,
+    val scalar: ScalarType,
 )
 
 data class ShaderParameter(
@@ -71,6 +94,12 @@ data class ShaderParameter(
     val size: Int,
     val alignment: Int,
     val elementSize: Int,
+    /**
+     * Scalar type of a value parameter; for vectors and matrices, the element's scalar
+     * type. [ScalarType.None] for resources and structs, whose element type is reported
+     * by [resourceResult] instead.
+     */
+    val scalar: ScalarType,
     val resourceResult: ResourceResultType?,
     val attributes: List<UserAttribute>,
 ) {
@@ -81,11 +110,32 @@ data class EntryPoint(
     val name: String,
     val stage: ShaderStage,
     val spirv: ByteArray,
+    /** User attributes on the entry point function. Interpreting them is the caller's job. */
+    val attributes: List<UserAttribute>,
+) {
+    fun attribute(name: String): UserAttribute? = attributes.firstOrNull { it.name == name }
+}
+
+/**
+ * The constant buffer Slang synthesises for loose uniform parameters.
+ *
+ * A shader that declares no uniform parameters has no such buffer, in which case
+ * [CompileResult.globalConstantBuffer] is null.
+ */
+data class GlobalConstantBuffer(
+    /** Binding number within the descriptor set. */
+    val binding: Int,
+    /** Descriptor set number. */
+    val space: Int,
+    /** Size in bytes. */
+    val size: Int,
 )
 
 data class CompileResult(
     val entryPoints: List<EntryPoint>,
     val parameters: List<ShaderParameter>,
+    /** Null for shaders that declare no uniform parameters. */
+    val globalConstantBuffer: GlobalConstantBuffer?,
     val diagnostics: String,
 )
 
