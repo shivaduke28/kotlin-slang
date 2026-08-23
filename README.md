@@ -43,7 +43,7 @@ repositories {
 }
 
 dependencies {
-    implementation("com.shivaduke:kotlinslang:0.1.0@aar")
+    implementation("com.shivaduke:kotlinslang:0.2.0@aar")
 }
 ```
 
