@@ -86,6 +86,11 @@ Instrumented tests compile the shader corpus in
 `kotlinslang/src/androidTest/assets/shaders` on a real device and assert SPIR-V
 output and reflection layout.
 
+`kotlinslang/src/androidTest/assets/arshes_effects` holds a larger corpus of
+production-sized Arshes effects (from the arshes-playground repository).
+`ArshesEffectCorpusTest` compiles them all and logs a success-rate and
+compile-time report to logcat under the `ArshesCorpus` tag.
+
 `spike/` contains standalone C++ verification tools (smoke/corpus/reflection
 dumps) used during the initial feasibility spike; they can be run directly via
 adb without the Gradle toolchain.
