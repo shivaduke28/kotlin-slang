@@ -281,6 +281,9 @@ std::string toStdString(JNIEnv* env, jstring s)
 
 jobject makeResult(JNIEnv* env, const std::string& json, const std::vector<Slang::ComPtr<ISlangBlob>>& blobs)
 {
+    // Classes and members resolved by name here are invisible to R8. Whenever a new
+    // FindClass / GetMethodID / GetFieldID lookup is added, add a matching -keep rule to
+    // kotlinslang/consumer-rules.pro or consumers with minification enabled will crash.
     jclass resultClass = env->FindClass("com/shivaduke/kotlinslang/NativeCompileResult");
     if (!resultClass)
         return nullptr;

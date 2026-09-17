@@ -47,6 +47,9 @@ dependencies {
 }
 ```
 
+The AAR ships consumer ProGuard rules (`kotlinslang/consumer-rules.pro`), so
+no extra keep rules are needed in apps that enable R8/minification.
+
 ## Usage
 
 ```kotlin
@@ -111,6 +114,11 @@ make build ANDROID_NDK=$HOME/Library/Android/sdk/ndk/28.2.13676358 ANDROID_PLATF
 Instrumented tests compile the shader corpus in
 `kotlinslang/src/androidTest/assets/shaders` on a real device and assert SPIR-V
 output and reflection layout.
+
+`sample/` is a minimal app that depends on `:kotlinslang` with R8 enabled. Its
+instrumented test runs against the minified release build
+(`./gradlew :sample:connectedAndroidTest`) and guards the consumer ProGuard
+rules shipped in the AAR.
 
 `spike/` contains standalone C++ verification tools (smoke/corpus/reflection
 dumps) used during the initial feasibility spike; they can be run directly via
