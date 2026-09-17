@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "kotlin-slang"
 include(":kotlinslang")
+include(":sample")
