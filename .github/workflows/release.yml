@@ -20,6 +20,22 @@ jobs:
             exit 1
           fi
 
+      - name: Ensure version is newer than every existing tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          latest=$(gh api --paginate "repos/$GITHUB_REPOSITORY/tags" --jq '.[].name' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1)
+          echo "Latest existing tag: v${latest:-none}"
+          if [ -n "$latest" ]; then
+            newest=$(printf '%s\n%s\n' "$latest" "$VERSION" | sort -V | tail -1)
+            if [ "$VERSION" = "$latest" ] || [ "$newest" != "$VERSION" ]; then
+              echo "Error: v$VERSION must be newer than v$latest"
+              exit 1
+            fi
+          fi
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
