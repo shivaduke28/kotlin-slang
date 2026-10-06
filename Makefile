@@ -61,7 +61,8 @@ generators:
 			-DSLANG_ENABLE_TESTS=OFF \
 			-DSLANG_ENABLE_EXAMPLES=OFF \
 			-DSLANG_ENABLE_GFX=OFF \
-			-DSLANG_ENABLE_SLANG_RHI=OFF && \
+			-DSLANG_ENABLE_SLANG_RHI=OFF \
+			-DSLANG_ENABLE_DXIL=OFF && \
 		$(NINJA); \
 	fi
 	@echo "$(GREEN)✓ Generators ready$(NC)"
@@ -87,7 +88,8 @@ android-arm64: generators
 		-DSLANG_ENABLE_SLANGD=OFF \
 		-DSLANG_ENABLE_SLANGC=OFF \
 		-DSLANG_ENABLE_SLANGRT=OFF \
-		-DSLANG_ENABLE_SLANGI=OFF && \
+		-DSLANG_ENABLE_SLANGI=OFF \
+		-DSLANG_ENABLE_DXIL=OFF && \
 	$(NINJA) libslang-compiler.a libcompiler-core.a libcore.a && \
 	$(NDK_BIN)/llvm-strip -S Release/lib/libslang-compiler.a && \
 	$(NDK_BIN)/llvm-strip -S Release/lib/libcompiler-core.a && \
