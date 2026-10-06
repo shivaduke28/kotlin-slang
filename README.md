@@ -43,9 +43,13 @@ repositories {
 }
 
 dependencies {
-    implementation("com.shivaduke:kotlinslang:0.2.0@aar")
+    implementation("com.shivaduke:kotlinslang:<version>@aar")
 }
 ```
+
+Replace `<version>` with a version from the
+[Releases](https://github.com/shivaduke28/kotlin-slang/releases) page, without
+the `v` prefix (tag `vX.Y.Z` → `X.Y.Z`).
 
 The AAR ships consumer ProGuard rules (`kotlinslang/consumer-rules.pro`), so
 no extra keep rules are needed in apps that enable R8/minification.
