@@ -21,7 +21,7 @@ Kotlin API (Android library → AAR)             kotlinslang/src/main/kotlin/
 - The `slang/` submodule is **build-time only**. Consumers depend on a
   prebuilt AAR; the submodule never reaches the app build, and app size is
   affected only by the bundled `.so` (~11 MB download increment).
-- Slang is pinned to the same version as swift-slang (currently `v2026.13.1`)
+- Slang is pinned to the same version as swift-slang (currently `v2026.19`)
   so that reflection behavior stays consistent across platforms.
 - The JNI surface is a single call returning SPIR-V blobs plus reflection
   metadata (JSON); typed models live in Kotlin.
