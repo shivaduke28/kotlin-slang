@@ -52,6 +52,7 @@ class SlangCompiler {
                 size = p.optInt("size", 0),
                 alignment = p.optInt("alignment", 0),
                 elementSize = p.optInt("elementSize", 0),
+                elementStride = p.optInt("elementStride", 0),
                 scalar = ScalarType.from(p.optString("scalar", "none")),
                 resourceResult = p.optJSONObject("resourceResult")?.let { r ->
                     ResourceResultType(

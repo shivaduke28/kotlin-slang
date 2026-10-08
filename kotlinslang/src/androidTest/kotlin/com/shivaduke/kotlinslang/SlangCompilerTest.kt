@@ -111,6 +111,35 @@ class SlangCompilerTest {
     }
 
     @Test
+    fun reportsElementStrideSeparatelyFromSize() {
+        val result = compiler.compile(
+            """
+            struct Pair { float3 a; float b; };
+            RWStructuredBuffer<float3> vectors;
+            RWStructuredBuffer<float> scalars;
+            RWStructuredBuffer<Pair> pairs;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void main(uint3 id : SV_DispatchThreadID) {
+                vectors[id.x] = float3(1.0, 2.0, 3.0);
+                scalars[id.x] = 1.0;
+                pairs[id.x].b = 1.0;
+            }
+            """.trimIndent(),
+        )
+        val vectors = result.parameters.first { it.name == "vectors" }
+        assertEquals(12, vectors.elementSize)
+        assertEquals(16, vectors.elementStride)
+        val scalars = result.parameters.first { it.name == "scalars" }
+        assertEquals(4, scalars.elementSize)
+        assertEquals(4, scalars.elementStride)
+        val pairs = result.parameters.first { it.name == "pairs" }
+        assertEquals(16, pairs.elementSize)
+        assertEquals(16, pairs.elementStride)
+    }
+
+    @Test
     fun reportsDiagnosticsOnError() {
         val e = try {
             compiler.compile("[shader(\"fragment\")]\nfloat4 f() : SV_Target { return undefined_symbol; }")
