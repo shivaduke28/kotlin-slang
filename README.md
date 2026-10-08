@@ -62,7 +62,8 @@ val result = compiler.compile(source, macros = mapOf("RESOLUTION_X" to "1920"))
 
 result.entryPoints  // name, stage, SPIR-V bytes and user attributes per entry point
 result.parameters   // name, category, binding index/space, uniform offset,
-                    // size/alignment, scalar type, resource element type,
+                    // size/alignment, element size/stride, scalar type,
+                    // resource element type,
                     // user attributes
 result.globalConstantBuffer  // binding, descriptor set and byte size of the
                              // implicit constant buffer Slang synthesises for

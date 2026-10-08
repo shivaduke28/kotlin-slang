@@ -204,9 +204,16 @@ void appendParameter(std::string& json, slang::VariableLayoutReflection* param)
             std::to_string(typeLayout->getAlignment(SLANG_PARAMETER_CATEGORY_UNIFORM));
 
         size_t elementSize = 0;
+        size_t elementStride = 0;
         if (slang::TypeLayoutReflection* element = typeLayout->getElementTypeLayout())
+        {
             elementSize = element->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM);
+            // getElementStride() returns 0 for structured buffers; it only handles arrays and
+            // vectors. The element's own stride is its size rounded up to its alignment.
+            elementStride = element->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM);
+        }
         json += ",\"elementSize\":" + std::to_string(elementSize);
+        json += ",\"elementStride\":" + std::to_string(elementStride);
 
         json += ',';
         appendString(json, "scalar", scalarNameOf(typeLayout->getType()));

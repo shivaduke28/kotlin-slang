@@ -96,7 +96,14 @@ data class ShaderParameter(
     val kind: TypeKind,
     val size: Int,
     val alignment: Int,
+    /** Byte size of the element of an array or buffer type; 0 when there is no element. */
     val elementSize: Int,
+    /**
+     * Distance in bytes between consecutive elements of an array or buffer type: [elementSize]
+     * rounded up to the element's alignment. Size a buffer of N elements as N * elementStride;
+     * in std430 a `float3` element is 12 bytes but 16 bytes apart. 0 when there is no element.
+     */
+    val elementStride: Int,
     /**
      * Scalar type of a value parameter; for vectors and matrices, the element's scalar
      * type. [ScalarType.None] for resources and structs, whose element type is reported
