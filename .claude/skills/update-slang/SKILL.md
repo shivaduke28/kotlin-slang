@@ -23,16 +23,22 @@ NDK のバージョンは `Makefile` の `ANDROID_NDK` と `kotlinslang/build.gr
 
 ### 1. 更新先バージョンの決定
 
-Slang は swift-slang と同じバージョンにピンする（リフレクションの挙動をプラットフォーム間で揃えるため）。swift-slang 側のピンは `slang-binary/<version>` タグで分かる:
+基準は Slang 本家（shader-slang/slang）の最新リリース:
 
 ```bash
-gh release list -R shivaduke28/swift-slang --limit 10
+gh release list -R shader-slang/slang --limit 10
 git -C slang describe --tags   # 現在のピン
 ```
 
-- `$ARGUMENTS` が省略されていたら、swift-slang の最新 `slang-binary/*` を提案してユーザーに確認する
-- `$ARGUMENTS` が swift-slang のピンと違う場合は、その旨をユーザーに伝えて確認する
-- `slang-binary/*` タグは swift-slang のパッケージリリース前に作られる。swift-slang 側がまだ main にマージされていない可能性があるので、気になる場合はユーザーに確認する
+- `$ARGUMENTS` が省略されていたら、`Latest` が付いたリリースを提案してユーザーに確認する
+- 現在のピンが既に最新なら、更新不要であることを報告して終了する
+- 途中のバージョンを飛ばす場合は、飛ばしたリリースのノートも確認する（`gh release view <tag> -R shader-slang/slang`）。破壊的変更があればユーザーに報告する。リリースノートが空のバージョンもあるので、その場合はそう伝える
+
+swift-slang も同じ Slang をピンしている。向こうのピンは参考情報として確認し、ずれる場合はユーザーに一言伝える（止める理由にはしない）:
+
+```bash
+gh release list -R shivaduke28/swift-slang --limit 10   # slang-binary/<version> タグ
+```
 
 ### 2. ブランチ作成
 
