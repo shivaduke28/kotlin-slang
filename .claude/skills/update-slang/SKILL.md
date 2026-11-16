@@ -8,7 +8,7 @@ argument-hint: [slang-version]
 
 更新先バージョン: $ARGUMENTS（例: v2026.19。省略時は手順 1 で決める）
 
-swift-slang と違い、ヘッダーのコピーとバイナリリリースは不要。JNI は `slang/include` を直接参照し、AAR はリリース時に CI が Slang をソースからビルドして作る。このスキルの成果物は「サブモジュールのピン + Makefile の追従 + README」のコミットだけ。
+JNI は `slang/include` を直接参照し、AAR はリリース時に CI が Slang をソースからビルドして作る。そのためこのスキルの成果物は「サブモジュールのピン + Makefile の追従 + README」のコミットだけになる。
 
 ## 前提条件の確認
 
@@ -33,12 +33,6 @@ git -C slang describe --tags   # 現在のピン
 - `$ARGUMENTS` が省略されていたら、`Latest` が付いたリリースを提案してユーザーに確認する
 - 現在のピンが既に最新なら、更新不要であることを報告して終了する
 - 途中のバージョンを飛ばす場合は、飛ばしたリリースのノートも確認する（`gh release view <tag> -R shader-slang/slang`）。破壊的変更があればユーザーに報告する。リリースノートが空のバージョンもあるので、その場合はそう伝える
-
-swift-slang も同じ Slang をピンしている。向こうのピンは参考情報として確認し、ずれる場合はユーザーに一言伝える（止める理由にはしない）:
-
-```bash
-gh release list -R shivaduke28/swift-slang --limit 10   # slang-binary/<version> タグ
-```
 
 ### 2. ブランチ作成
 
@@ -98,7 +92,6 @@ find slang/build-android-arm64 -name "*.a" -not -path "*/Release/lib/*"
 **ビルドのトラブルシューティング**:
 
 - ホストの generators configure が `building DXC from source` と出して DXC のクローンとビルドを始める場合: `SLANG_ENABLE_DXIL` が効いていない。`Makefile` の2つの cmake 呼び出しの両方に `-DSLANG_ENABLE_DXIL=OFF` を渡している（v2026.18 から macOS で必要）。途中で止めた場合は `slang/generators` を削除してからやり直す
-- 新しい cmake オプションやターゲットが原因で失敗した場合、swift-slang の `Makefile` と `.claude/skills/update-slang/SKILL.md` に同じバージョンでの対処が書かれていることが多い。先にそちらを見る
 - cmake 呼び出しは `generators` と `android-arm64` の2つ。フラグを足すときは両方に必要か確認する
 
 ### 6. AAR のビルド
@@ -131,11 +124,7 @@ instrumented test は実機（arm64-v8a）が必要。`adb` は PATH にない�
 
 ### 8. README.md 更新
 
-`README.md` の Architecture 節にあるピンの表記を更新する:
-
-```
-- Slang is pinned to the same version as swift-slang (currently `<version>`)
-```
+`README.md` の Architecture 節にある Slang バージョンの表記（``currently `vXXXX.YY` ``）を新しいバージョンに書き換える。
 
 ### 9. コミット
 
