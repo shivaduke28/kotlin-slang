@@ -6,7 +6,9 @@ argument-hint: [slang-version]
 
 # Slang 更新
 
-更新先バージョン: $ARGUMENTS（例: v2026.19。省略時は手順 1 で決める）
+引数（更新先バージョン、例: v2026.19）: `$ARGUMENTS`
+
+引数が空なら、更新先は手順 1 で決める。
 
 JNI は `slang/include` を直接参照し、AAR はリリース時に CI が Slang をソースからビルドして作る。そのためこのスキルの成果物は「サブモジュールのピン + Makefile の追従 + README」のコミットだけになる。
 
@@ -17,39 +19,48 @@ cmake --version && ninja --version && java -version
 ls "$HOME/Library/Android/sdk/ndk/28.2.13676358"
 ```
 
-NDK のバージョンは `Makefile` の `ANDROID_NDK` と `kotlinslang/build.gradle.kts` の `ndkVersion` に合わせる。
+NDK のバージョンは以下の4か所に書かれていて、すべて同じ値でなければならない。Slang の更新で NDK を上げる必要が出たら全部を揃えて直す:
+
+- `Makefile` の `ANDROID_NDK`
+- `kotlinslang/build.gradle.kts` の `ndkVersion`
+- `.github/workflows/release.yml`（インストールと `make build` の引数の2行）
+- `README.md` の Building 節
 
 ## 手順
 
 ### 1. 更新先バージョンの決定
 
-基準は Slang 本家（shader-slang/slang）の最新リリース:
+基準は Slang 本家（shader-slang/slang）の最新リリース。現在のピンは、今いるブランチではなく `origin/main` のものを見る:
 
 ```bash
 gh release list -R shader-slang/slang --limit 10
-git -C slang describe --tags   # 現在のピン
+git fetch origin
+git submodule update --init
+git -C slang describe --tags "$(git rev-parse origin/main:slang)"   # main のピン
 ```
 
-- `$ARGUMENTS` が省略されていたら、`Latest` が付いたリリースを提案してユーザーに確認する
-- 現在のピンが既に最新なら、更新不要であることを報告して終了する
+- 引数が空なら、`Latest` が付いたリリースを提案してユーザーに確認する
+- main のピンが既に更新先と同じなら、更新不要であることを報告して終了する
 - 途中のバージョンを飛ばす場合は、飛ばしたリリースのノートも確認する（`gh release view <tag> -R shader-slang/slang`）。破壊的変更があればユーザーに報告する。リリースノートが空のバージョンもあるので、その場合はそう伝える
+
+ここで分かった main のピンを旧バージョン、更新先を新バージョンとして控える。以降のコマンドの `<old>` と `<new>` には、この2つのタグをそのまま書く（シェル変数はコマンド実行をまたいで残らない）。
 
 ### 2. ブランチ作成
 
 main に直接コミットしない。最新の main から切る:
 
 ```bash
-git fetch origin
-git switch -c update-slang-<version> origin/main
+git switch --no-track -c update-slang-<new> origin/main
 ```
+
+`--no-track` を外さないこと。付けないと upstream が `origin/main` になり、あとの `git push` が main を向く。
 
 ### 3. サブモジュール更新
 
 ```bash
 git submodule update --init --recursive
-OLD=$(git -C slang describe --tags)
 git -C slang fetch --tags
-git -C slang checkout <version>
+git -C slang checkout <new>
 git -C slang submodule update --init --recursive
 ```
 
@@ -58,22 +69,23 @@ git -C slang submodule update --init --recursive
 ### 4. ヘッダー差分の確認
 
 ```bash
-git -C slang diff --stat "$OLD" <version> -- include/
-git -C slang diff "$OLD" <version> -- include/slang.h
+git -C slang diff --stat <old> <new> -- include/
+git -C slang diff <old> <new> -- include/
 ```
 
-`kotlinslang/src/main/cpp/kotlinslang_jni.cpp` と `spike/smoke/*.cpp` が使っている API に削除・シグネチャ変更がないか確認し、結果をユーザーに報告する。
+`slang.h` 以外のヘッダーも中身まで見る（`slang.h` は他のヘッダーを include している）。`kotlinslang/src/main/cpp/kotlinslang_jni.cpp` と `spike/smoke/*.cpp` が使っている API に削除・シグネチャ変更がないか確認し、結果をユーザーに報告する。
+
+変更があった場合は JNI・Kotlin・テストを追従させる。その修正もこの更新のコミットに含める。
 
 ### 5. 静的ライブラリのビルド
 
 ```bash
-make clean
-make build
-make verify
+make clean && make build && make verify
 ```
 
-- **`make clean` は必須**。`generators` ターゲットは `slang/generators/` が存在するとスキップするため、clean しないと旧バージョンのジェネレータで新バージョンをビルドしてしまう
-- ホストのジェネレータと arm64-v8a の両方をビルドするので 10〜30 分かかる。バックグラウンドで実行する
+- 3つは必ず `&&` でつなぐ。`make verify` はライブラリが無くても exit 0 で終わるので、単独で流すとビルド失敗を見逃す
+- **`make clean` は必須**。`generators` ターゲットは `slang/generators/` にビルド済みの成果物があるとスキップするため、clean しないと旧バージョンのジェネレータで新バージョンをビルドしてしまう
+- ホストのジェネレータと arm64-v8a の両方をビルドするので数分〜30分かかる（マシン次第）。バックグラウンドで実行する
 
 **新しい依存ライブラリの確認**: Slang は更新で外部依存を増やすことがある（v2026.13.1 で cmark-gfm が追加された）。
 
@@ -87,7 +99,15 @@ find slang/build-android-arm64 -name "*.a" -not -path "*/Release/lib/*"
 - `external/lz4/build/cmake/liblz4.a`
 - `external/cmark/src/libcmark-gfm.a`
 
-それ以外の `.a` が出てきたら、`Makefile` の `android-arm64` ターゲットの strip・cp・`llvm-ar -M` スクリプト（`addlib`）の3か所に追加してビルドし直す。パスが変わって strip が失敗した場合も同じ3か所を直す。
+`Release/lib/` 側も確認する。ここに出力されたものは自動でコピーされるが、マージされるのは名前を列挙した3つだけ:
+
+```bash
+ls slang/build-android-arm64/Release/lib/
+```
+
+`libslang-compiler.a` / `libcompiler-core.a` / `libcore.a` の3つだけなら問題ない。
+
+どちらかで未知の `.a` が出てきたら、`Makefile` の `android-arm64` ターゲットの strip・cp・`llvm-ar -M` スクリプト（`addlib`）の3か所に追加してビルドし直す。パスが変わって strip が失敗した場合も同じ3か所を直す。
 
 **ビルドのトラブルシューティング**:
 
@@ -129,15 +149,24 @@ instrumented test は実機（arm64-v8a）が必要。`adb` は PATH にない�
 ### 9. コミット
 
 ```bash
-git add slang Makefile README.md
-git commit
+git status --short
+git add slang README.md <その他の変更ファイル>
+git commit -m "Update Slang to <new>" -m "<本文>"
 ```
 
-コミットメッセージは `Update Slang to <version>`。Makefile を変更した場合は理由を本文に書く。キャラ口調は使わない。
+- `git status --short` で変更ファイルを確認し、この更新のために直したもの（`Makefile`、JNI、テストなど）を漏れなく add する
+- 本文には Makefile やコードを変更した理由を書く。キャラ口調は使わない
 
 ### 10. PR 作成
 
-ユーザーに確認してから push して PR を作る。本文には以下を書く:
+ユーザーに確認してから push して PR を作る:
+
+```bash
+git push -u origin HEAD
+gh pr create --base main
+```
+
+本文には以下を書く:
 
 - 旧バージョン → 新バージョン
 - Makefile の変更とその理由（あれば）
