@@ -81,6 +81,27 @@ class SlangCompilerTest {
     }
 
     @Test
+    fun attributeArgumentsKeepTheirNumberTypes() {
+        val result = compiler.compile(
+            """
+            [__AttributeUsage(_AttributeTargets.Var)]
+            struct valuesAttribute { float a; float b; float c; float d; int e; };
+
+            [values(0.0, 1.0, 0.5, 2500000.0, 7)]
+            uniform float amount;
+
+            [shader("fragment")]
+            float4 fragmentMain() : SV_Target { return float4(amount); }
+            """.trimIndent(),
+        )
+
+        // Whole floats below a million are Ints, other floats Doubles at six significant
+        // digits; hosts may depend on these types when reading args directly.
+        val args = result.parameters.single().attribute("values")!!.args
+        assertEquals(listOf<Any>(0, 1, 0.5, 2500000.0, 7), args)
+    }
+
+    @Test
     fun extractsResourceBindings() {
         val result = compileShader("camera_texture.slang")
 
