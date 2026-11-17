@@ -23,8 +23,9 @@ Kotlin API (Android library → AAR)             kotlinslang/src/main/kotlin/
   affected only by the bundled `.so` (~11 MB download increment).
 - Slang is pinned to the same version as swift-slang (currently `v2026.22`)
   so that reflection behavior stays consistent across platforms.
-- The JNI surface is a single call returning SPIR-V blobs plus reflection
-  metadata (JSON); typed models live in Kotlin.
+- The JNI surface is small: create a session, load a module from source, and
+  compile a module, which returns SPIR-V blobs plus reflection metadata (JSON).
+  Typed models live in Kotlin.
 
 ## Installation
 
@@ -79,30 +80,35 @@ val topology = result.entryPoints.first().attribute("topology")
 topology?.intArg(0)
 ```
 
-### Additional modules
+### Sessions and modules
 
-Sources passed as `modules` (module name → source) are loaded into the same
-session before the main source, which can then `import` them by name:
+`SlangCompiler.compile` runs each source in a fresh session. To load several
+modules that import one another, or to reuse loaded modules across
+compilations, use `SlangSession` directly. It follows the Slang API: load
+modules into a session from source strings (`ISession::loadModuleFromSourceString`),
+then compile one.
 
 ```kotlin
-val result = compiler.compile(
-    source = "import common;\n...",
-    macros = emptyMap(),
-    modules = mapOf("common" to commonSource),
-)
+SlangSession(macros).use { session ->
+    session.loadModule("common", commonSource)
+    val result = session.loadModule("main", "import common;\n...").compile()
+}
 ```
 
+- A module can `import` any module loaded into the session before it, by the
+  name it was loaded under. Loading a name again with a different source fails.
 - Declarations from an imported module behave like local ones: attributes it
   declares with `__AttributeUsage` are reported with their argument values, and
   its `static const` values are folded when used in attribute arguments.
-- Modules are loaded in the map's iteration order, so a module can import only
-  the ones before it. Macros apply to modules too.
-- A module that the main source does not import has no effect on the result,
-  although it is still compiled and its errors are reported (against
-  `<name>.slang`).
-- Uniforms and resources declared in an imported module are part of the program
-  and show up in `parameters`. Entry points defined in modules are not compiled.
-- Module names must be identifiers; `shader` is reserved for the main source.
+- `compile()` links the module with every entry point it defines. Uniforms and
+  resources declared in modules it imports are part of the program and show up
+  in `parameters`; entry points defined in imported modules are not compiled.
+  Modules that are loaded but not imported have no effect on the result.
+- Macros apply to every module in the session.
+- `loadModule` takes an optional `path` (default `<name>.slang`), the file name
+  Slang reports in diagnostics.
+- A session holds native memory until it is closed; modules are valid only
+  while their session is open.
 
 ### Requirements for Vulkan pipeline creation
 
@@ -119,8 +125,8 @@ layers are enabled.
 
 Compilation failures throw `SlangCompileException` with Slang diagnostics.
 
-Note: the Slang global session is not thread-safe — call `compile` from a
-single thread (or serialize externally).
+Note: the Slang global session is not thread-safe — use `SlangCompiler`,
+`SlangSession` and `SlangModule` from a single thread (or serialize externally).
 
 ## Building
 
