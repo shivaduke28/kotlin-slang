@@ -1,10 +1,22 @@
 // JNI boundary for kotlin-slang.
 //
-// Mirrors the part of the Slang API needed to go from source to SPIR-V: create a
-// session, load modules into it from source strings, and compile a loaded module.
-// Compiling links the module with all of its defined entry points and returns
-// reflection metadata as JSON plus the SPIR-V blobs. Everything richer (typed
-// models, pass resolution) lives in Kotlin.
+// Each function here forwards to exactly one method of the Slang C++ API
+// (slang.h) and is named after the interface and method it forwards to. The
+// Kotlin classes in com.shivaduke.kotlinslang mirror the Slang interfaces on top
+// of these; anything that combines several Slang calls lives in Kotlin.
+//
+// Handles passed across the boundary are raw pointers:
+//   - global sessions: slang::IGlobalSession*, owning one reference
+//   - sessions: SessionState*, owned by the Kotlin SlangSession
+//   - component types (modules, entry points, composites, linked programs):
+//     slang::IComponentType*, kept alive by their SessionState
+//   - reflection objects: the slang reflection pointers themselves, which are
+//     owned by the component type they were obtained from
+// so every handle derived from a session is valid until that session is released.
+//
+// All functions are static natives of the Kotlin object SlangNative and resolve
+// no Java classes or members by name, so no R8 keep rules are needed beyond
+// keeping the native method names.
 #include <jni.h>
 #include <slang-com-ptr.h>
 #include <slang.h>
@@ -16,265 +28,50 @@
 namespace
 {
 
-void appendEscaped(std::string& out, const char* s)
+// The Kotlin enums carry these values as their `raw`; fail the build if Slang
+// renumbers them.
+static_assert(SLANG_SPIRV == 6, "SlangCompileTarget");
+static_assert(SLANG_STAGE_FRAGMENT == 5 && SLANG_STAGE_COMPUTE == 6, "SlangStage");
+static_assert(SLANG_PARAMETER_CATEGORY_UNIFORM == 8, "SlangParameterCategory");
+static_assert(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT == 9, "SlangParameterCategory");
+static_assert(SLANG_PARAMETER_CATEGORY_SUB_ELEMENT_REGISTER_SPACE == 20, "SlangParameterCategory");
+static_assert(SLANG_TYPE_KIND_RESOURCE == 7 && SLANG_TYPE_KIND_ENUM == 20, "SlangTypeKind");
+static_assert(SLANG_SCALAR_TYPE_FLOAT32 == 8 && SLANG_SCALAR_TYPE_UINT16 == 13, "SlangScalarType");
+
+// Native side of a Kotlin SlangSession.
+struct SessionState
 {
-    if (!s)
-        return;
-    for (const char* p = s; *p; p++)
+    Slang::ComPtr<slang::IGlobalSession> global;
+    Slang::ComPtr<slang::ISession> session;
+    // Component types handed out to Kotlin. Modules are owned by the ISession itself.
+    std::vector<Slang::ComPtr<slang::IComponentType>> owned;
+
+    jlong keep(slang::IComponentType* component)
     {
-        const char c = *p;
-        switch (c)
-        {
-        case '"': out += "\\\""; break;
-        case '\\': out += "\\\\"; break;
-        case '\n': out += "\\n"; break;
-        case '\r': out += "\\r"; break;
-        case '\t': out += "\\t"; break;
-        default:
-            if (static_cast<unsigned char>(c) < 0x20)
-            {
-                char buf[8];
-                snprintf(buf, sizeof(buf), "\\u%04x", c);
-                out += buf;
-            }
-            else
-            {
-                out += c;
-            }
-        }
+        owned.emplace_back(component);
+        return reinterpret_cast<jlong>(component);
     }
+};
+
+template<typename T>
+T* ptr(jlong handle)
+{
+    return reinterpret_cast<T*>(handle);
 }
 
-void appendString(std::string& out, const char* key, const char* value)
+jlong handle(const void* p)
 {
-    out += '"';
-    out += key;
-    out += "\":\"";
-    appendEscaped(out, value);
-    out += '"';
+    return reinterpret_cast<jlong>(p);
 }
 
-const char* categoryName(slang::ParameterCategory c)
+slang::IModule* modulePtr(jlong h)
 {
-    switch (c)
-    {
-    case slang::ParameterCategory::ConstantBuffer: return "constantBuffer";
-    case slang::ParameterCategory::ShaderResource: return "shaderResource";
-    case slang::ParameterCategory::UnorderedAccess: return "unorderedAccess";
-    case slang::ParameterCategory::SamplerState: return "samplerState";
-    case slang::ParameterCategory::Uniform: return "uniform";
-    case slang::ParameterCategory::DescriptorTableSlot: return "descriptorTableSlot";
-    case slang::ParameterCategory::Mixed: return "mixed";
-    case slang::ParameterCategory::RegisterSpace: return "registerSpace";
-    default: return "other";
-    }
+    return static_cast<slang::IModule*>(ptr<slang::IComponentType>(h));
 }
 
-const char* kindName(slang::TypeReflection::Kind k)
+slang::IEntryPoint* entryPointPtr(jlong h)
 {
-    using Kind = slang::TypeReflection::Kind;
-    switch (k)
-    {
-    case Kind::Scalar: return "scalar";
-    case Kind::Vector: return "vector";
-    case Kind::Matrix: return "matrix";
-    case Kind::Resource: return "resource";
-    case Kind::SamplerState: return "samplerState";
-    case Kind::Struct: return "struct";
-    case Kind::Array: return "array";
-    case Kind::ConstantBuffer: return "constantBuffer";
-    case Kind::ParameterBlock: return "parameterBlock";
-    default: return "other";
-    }
-}
-
-const char* scalarName(slang::TypeReflection::ScalarType s)
-{
-    using S = slang::TypeReflection::ScalarType;
-    switch (s)
-    {
-    case S::Float32: return "float32";
-    case S::Float16: return "float16";
-    case S::Float64: return "float64";
-    case S::Int32: return "int32";
-    case S::UInt32: return "uint32";
-    case S::Int64: return "int64";
-    case S::UInt64: return "uint64";
-    case S::Int16: return "int16";
-    case S::UInt16: return "uint16";
-    case S::Int8: return "int8";
-    case S::UInt8: return "uint8";
-    case S::Bool: return "bool";
-    default: return "none";
-    }
-}
-
-// Scalar type behind a value type: the type itself for scalars, the element type
-// for vectors and matrices, "none" for anything else (resources, structs, ...).
-const char* scalarNameOf(slang::TypeReflection* type)
-{
-    if (!type)
-        return "none";
-    using K = slang::TypeReflection::Kind;
-    const K kind = type->getKind();
-    if (kind == K::Vector || kind == K::Matrix)
-    {
-        slang::TypeReflection* element = type->getElementType();
-        return element ? scalarName(element->getScalarType()) : "none";
-    }
-    if (kind == K::Scalar)
-        return scalarName(type->getScalarType());
-    return "none";
-}
-
-// Works for any reflection object exposing getUserAttributeCount() /
-// getUserAttributeByIndex(): VariableReflection (parameters) and
-// FunctionReflection (entry points).
-template<typename Owner>
-void appendUserAttributes(std::string& json, Owner* owner)
-{
-    json += "\"attributes\":[";
-    if (owner)
-    {
-        const unsigned count = owner->getUserAttributeCount();
-        for (unsigned a = 0; a < count; a++)
-        {
-            slang::Attribute* attr = owner->getUserAttributeByIndex(a);
-            if (!attr)
-                continue;
-            if (a > 0)
-                json += ',';
-            json += '{';
-            appendString(json, "name", attr->getName());
-            json += ",\"args\":[";
-            const uint32_t argCount = attr->getArgumentCount();
-            for (uint32_t g = 0; g < argCount; g++)
-            {
-                if (g > 0)
-                    json += ',';
-                float f = 0;
-                int i = 0;
-                if (SLANG_SUCCEEDED(attr->getArgumentValueFloat(g, &f)))
-                {
-                    char buf[32];
-                    snprintf(buf, sizeof(buf), "%g", f);
-                    json += buf;
-                }
-                else if (SLANG_SUCCEEDED(attr->getArgumentValueInt(g, &i)))
-                {
-                    json += std::to_string(i);
-                }
-                else
-                {
-                    size_t len = 0;
-                    const char* s = attr->getArgumentValueString(g, &len);
-                    json += '"';
-                    if (s)
-                    {
-                        std::string tmp(s, len);
-                        appendEscaped(json, tmp.c_str());
-                    }
-                    json += '"';
-                }
-            }
-            json += "]}";
-        }
-    }
-    json += ']';
-}
-
-void appendParameter(std::string& json, slang::VariableLayoutReflection* param)
-{
-    slang::TypeLayoutReflection* typeLayout = param->getTypeLayout();
-
-    json += '{';
-    appendString(json, "name", param->getName() ? param->getName() : "");
-    json += ',';
-    appendString(json, "category", categoryName((slang::ParameterCategory)param->getCategory()));
-    json += ",\"bindingIndex\":" + std::to_string(param->getBindingIndex());
-    json += ",\"bindingSpace\":" + std::to_string(param->getBindingSpace());
-    json += ",\"uniformOffset\":" +
-        std::to_string(param->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM));
-
-    if (typeLayout)
-    {
-        json += ',';
-        appendString(json, "kind", kindName(typeLayout->getKind()));
-        json += ",\"size\":" +
-            std::to_string(typeLayout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM));
-        json += ",\"alignment\":" +
-            std::to_string(typeLayout->getAlignment(SLANG_PARAMETER_CATEGORY_UNIFORM));
-
-        size_t elementSize = 0;
-        size_t elementStride = 0;
-        if (slang::TypeLayoutReflection* element = typeLayout->getElementTypeLayout())
-        {
-            elementSize = element->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM);
-            // getElementStride() returns 0 for structured buffers; it only handles arrays and
-            // vectors. The element's own stride is its size rounded up to its alignment.
-            elementStride = element->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM);
-        }
-        json += ",\"elementSize\":" + std::to_string(elementSize);
-        json += ",\"elementStride\":" + std::to_string(elementStride);
-
-        json += ',';
-        appendString(json, "scalar", scalarNameOf(typeLayout->getType()));
-
-        if (typeLayout->getKind() == slang::TypeReflection::Kind::Resource)
-        {
-            if (slang::TypeReflection* result = typeLayout->getType()->getResourceResultType())
-            {
-                const bool isVector = result->getKind() == slang::TypeReflection::Kind::Vector;
-                slang::TypeReflection* scalar =
-                    isVector ? result->getElementType() : result;
-                json += ",\"resourceResult\":{";
-                appendString(json, "kind", kindName(result->getKind()));
-                json += ",\"components\":" +
-                    std::to_string(isVector ? (int)result->getElementCount() : 1);
-                json += ',';
-                appendString(
-                    json, "scalar", scalar ? scalarName(scalar->getScalarType()) : "none");
-                json += '}';
-            }
-        }
-    }
-    json += ',';
-    appendUserAttributes(json, param->getVariable());
-    json += '}';
-}
-
-// The implicit constant buffer Slang synthesises for loose uniform parameters,
-// or null when the shader declares none. Returns a diagnostic message when the
-// size cannot be resolved, in which case nothing is appended.
-//
-// The binding comes from the global params var layout, which is the path
-// appendParameter() already uses for ordinary parameters and which also carries
-// the descriptor set number. ProgramLayout::getGlobalConstantBufferBinding()
-// does not work on this target: it looks up LayoutResourceKind::ConstantBuffer,
-// the GLSL/SPIR-V layout rules map constant buffers to DescriptorTableSlot, so
-// the lookup always misses and it returns 0 regardless of the real binding.
-const char* appendGlobalConstantBuffer(std::string& json, slang::ProgramLayout* layout)
-{
-    slang::TypeLayoutReflection* globalsType = layout->getGlobalParamsTypeLayout();
-    slang::VariableLayoutReflection* globalsVar = layout->getGlobalParamsVarLayout();
-    const bool hasConstantBuffer =
-        globalsType && globalsType->getKind() == slang::TypeReflection::Kind::ConstantBuffer;
-    if (!hasConstantBuffer || !globalsVar)
-    {
-        json += "\"globalConstantBuffer\":null";
-        return nullptr;
-    }
-
-    const size_t size = layout->getGlobalConstantBufferSize();
-    if (size == SLANG_UNKNOWN_SIZE || size == SLANG_UNBOUNDED_SIZE)
-        return "global constant buffer size is unbounded or could not be resolved";
-
-    json += "\"globalConstantBuffer\":{\"binding\":" +
-        std::to_string(globalsVar->getBindingIndex());
-    json += ",\"space\":" + std::to_string(globalsVar->getBindingSpace());
-    json += ",\"size\":" + std::to_string(size);
-    json += '}';
-    return nullptr;
+    return static_cast<slang::IEntryPoint*>(ptr<slang::IComponentType>(h));
 }
 
 std::string toStdString(JNIEnv* env, jstring s)
@@ -288,243 +85,520 @@ std::string toStdString(JNIEnv* env, jstring s)
     return result;
 }
 
-jobject makeResult(JNIEnv* env, const std::string& json, const std::vector<Slang::ComPtr<ISlangBlob>>& blobs)
+std::vector<std::string> toStdStrings(JNIEnv* env, jobjectArray array)
 {
-    // Classes and members resolved by name here are invisible to R8. Whenever a new
-    // FindClass / GetMethodID / GetFieldID lookup is added, add a matching -keep rule to
-    // kotlinslang/consumer-rules.pro or consumers with minification enabled will crash.
-    jclass resultClass = env->FindClass("com/shivaduke/kotlinslang/NativeCompileResult");
-    if (!resultClass)
-        return nullptr;
-    jmethodID ctor = env->GetMethodID(resultClass, "<init>", "(Ljava/lang/String;[[B)V");
-    if (!ctor)
-        return nullptr;
-
-    jclass byteArrayClass = env->FindClass("[B");
-    jobjectArray spirvArray =
-        env->NewObjectArray((jsize)blobs.size(), byteArrayClass, nullptr);
-    for (size_t i = 0; i < blobs.size(); i++)
+    std::vector<std::string> result;
+    const jsize count = array ? env->GetArrayLength(array) : 0;
+    result.reserve(count);
+    for (jsize i = 0; i < count; i++)
     {
-        const jsize size = (jsize)blobs[i]->getBufferSize();
-        jbyteArray bytes = env->NewByteArray(size);
-        env->SetByteArrayRegion(
-            bytes, 0, size, static_cast<const jbyte*>(blobs[i]->getBufferPointer()));
-        env->SetObjectArrayElement(spirvArray, (jsize)i, bytes);
-        env->DeleteLocalRef(bytes);
+        auto element = (jstring)env->GetObjectArrayElement(array, i);
+        result.push_back(toStdString(env, element));
+        env->DeleteLocalRef(element);
     }
-
-    jstring jsonString = env->NewStringUTF(json.c_str());
-    return env->NewObject(resultClass, ctor, jsonString, spirvArray);
+    return result;
 }
 
-jobject makeError(JNIEnv* env, const char* stage, const char* diagnostics)
+jstring toJString(JNIEnv* env, const char* s)
 {
-    std::string json = "{\"ok\":false,";
-    appendString(json, "errorStage", stage);
-    json += ',';
-    appendString(json, "diagnostics", diagnostics ? diagnostics : "");
-    json += '}';
-    return makeResult(env, json, {});
+    return s ? env->NewStringUTF(s) : nullptr;
 }
 
-// The Slang global session is not thread-safe; callers on the Kotlin side are expected
-// to invoke this from a single thread.
-slang::IGlobalSession* globalSession()
+// Stores the text of a diagnostics blob in out[0]. `out` is the Kotlin stand-in for
+// an `IBlob** outDiagnostics` parameter and may be null.
+void setDiagnostics(JNIEnv* env, jobjectArray out, ISlangBlob* blob)
 {
-    static Slang::ComPtr<slang::IGlobalSession> session = [] {
-        Slang::ComPtr<slang::IGlobalSession> s;
-        slang_createGlobalSession(SLANG_API_VERSION, s.writeRef());
-        return s;
-    }();
-    return session.get();
+    if (!out || !blob)
+        return;
+    const std::string text(
+        static_cast<const char*>(blob->getBufferPointer()), blob->getBufferSize());
+    jstring jText = env->NewStringUTF(text.c_str());
+    env->SetObjectArrayElement(out, 0, jText);
+    env->DeleteLocalRef(jText);
 }
 
-// Native side of a Kotlin SlangSession. Owned by the Kotlin object through an opaque
-// handle and destroyed by nativeDestroy. Modules loaded into the session are owned by
-// the ISession, so module handles stay valid for as long as this object lives.
-struct SessionState
+jbyteArray toByteArray(JNIEnv* env, ISlangBlob* blob)
 {
-    Slang::ComPtr<slang::ISession> session;
-};
+    if (!blob)
+        return nullptr;
+    const jsize size = (jsize)blob->getBufferSize();
+    jbyteArray bytes = env->NewByteArray(size);
+    if (bytes)
+        env->SetByteArrayRegion(
+            bytes, 0, size, static_cast<const jbyte*>(blob->getBufferPointer()));
+    return bytes;
+}
 
 } // namespace
 
-extern "C" JNIEXPORT jlong JNICALL
-Java_com_shivaduke_kotlinslang_SlangSession_nativeCreate(
+#define JNI_FN(ret, name) \
+    extern "C" JNIEXPORT ret JNICALL Java_com_shivaduke_kotlinslang_SlangNative_##name
+
+// Getters taking only the object handle, or the handle and one int argument `i`.
+// `self` is the object, typed as T.
+#define GET(ret, name, T, expr)                        \
+    JNI_FN(ret, name)(JNIEnv* env, jclass, jlong h)    \
+    {                                                  \
+        (void)env;                                     \
+        auto* self = ptr<T>(h);                        \
+        return expr;                                   \
+    }
+#define GET_I(ret, name, T, expr)                              \
+    JNI_FN(ret, name)(JNIEnv* env, jclass, jlong h, jint i)    \
+    {                                                          \
+        (void)env;                                             \
+        auto* self = ptr<T>(h);                                \
+        return expr;                                           \
+    }
+
+using namespace slang;
+
+// ---------------------------------------------------------------------------
+// IGlobalSession
+// ---------------------------------------------------------------------------
+
+JNI_FN(jlong, createGlobalSession)(JNIEnv*, jclass)
+{
+    Slang::ComPtr<IGlobalSession> global;
+    if (SLANG_FAILED(slang_createGlobalSession(SLANG_API_VERSION, global.writeRef())))
+        return 0;
+    return handle(global.detach());
+}
+
+JNI_FN(void, globalSessionRelease)(JNIEnv*, jclass, jlong h)
+{
+    ptr<IGlobalSession>(h)->release();
+}
+
+JNI_FN(jint, globalSessionFindProfile)(JNIEnv* env, jclass, jlong h, jstring jName)
+{
+    return (jint)ptr<IGlobalSession>(h)->findProfile(toStdString(env, jName).c_str());
+}
+
+GET(jstring, globalSessionGetBuildTagString, IGlobalSession, toJString(env, self->getBuildTagString()))
+
+// Targets are passed as parallel arrays of TargetDesc::format and TargetDesc::profile,
+// preprocessor macros as parallel arrays of names and values.
+JNI_FN(jlong, globalSessionCreateSession)(
     JNIEnv* env,
-    jobject /*thiz*/,
-    jobjectArray jMacroKeys,
+    jclass,
+    jlong h,
+    jintArray jTargetFormats,
+    jintArray jTargetProfiles,
+    jobjectArray jSearchPaths,
+    jobjectArray jMacroNames,
     jobjectArray jMacroValues)
 {
-    using namespace slang;
+    IGlobalSession* global = ptr<IGlobalSession>(h);
 
-    IGlobalSession* global = globalSession();
-    if (!global)
-        return 0;
-
-    std::vector<std::string> macroKeys;
-    std::vector<std::string> macroValues;
-    std::vector<PreprocessorMacroDesc> macros;
-    const jsize macroCount = jMacroKeys ? env->GetArrayLength(jMacroKeys) : 0;
-    macroKeys.reserve(macroCount);
-    macroValues.reserve(macroCount);
-    for (jsize i = 0; i < macroCount; i++)
+    const jsize targetCount = env->GetArrayLength(jTargetFormats);
+    std::vector<jint> formats(targetCount);
+    std::vector<jint> profiles(targetCount);
+    env->GetIntArrayRegion(jTargetFormats, 0, targetCount, formats.data());
+    env->GetIntArrayRegion(jTargetProfiles, 0, targetCount, profiles.data());
+    std::vector<TargetDesc> targets(targetCount);
+    for (jsize i = 0; i < targetCount; i++)
     {
-        auto key = (jstring)env->GetObjectArrayElement(jMacroKeys, i);
-        auto value = (jstring)env->GetObjectArrayElement(jMacroValues, i);
-        macroKeys.push_back(toStdString(env, key));
-        macroValues.push_back(toStdString(env, value));
-        env->DeleteLocalRef(key);
-        env->DeleteLocalRef(value);
+        targets[i].format = (SlangCompileTarget)formats[i];
+        targets[i].profile = (SlangProfileID)profiles[i];
     }
-    for (jsize i = 0; i < macroCount; i++)
-        macros.push_back({macroKeys[i].c_str(), macroValues[i].c_str()});
 
-    TargetDesc target = {};
-    target.format = SLANG_SPIRV;
-    target.profile = global->findProfile("spirv_1_5");
+    const std::vector<std::string> searchPaths = toStdStrings(env, jSearchPaths);
+    std::vector<const char*> searchPathPtrs;
+    for (const std::string& path : searchPaths)
+        searchPathPtrs.push_back(path.c_str());
 
-    SessionDesc sessionDesc = {};
-    sessionDesc.targets = &target;
-    sessionDesc.targetCount = 1;
-    sessionDesc.preprocessorMacros = macros.empty() ? nullptr : macros.data();
-    sessionDesc.preprocessorMacroCount = (SlangInt)macros.size();
+    const std::vector<std::string> macroNames = toStdStrings(env, jMacroNames);
+    const std::vector<std::string> macroValues = toStdStrings(env, jMacroValues);
+    std::vector<PreprocessorMacroDesc> macros;
+    for (size_t i = 0; i < macroNames.size(); i++)
+        macros.push_back({macroNames[i].c_str(), macroValues[i].c_str()});
+
+    SessionDesc desc = {};
+    desc.targets = targets.data();
+    desc.targetCount = (SlangInt)targets.size();
+    desc.searchPaths = searchPathPtrs.data();
+    desc.searchPathCount = (SlangInt)searchPathPtrs.size();
+    desc.preprocessorMacros = macros.data();
+    desc.preprocessorMacroCount = (SlangInt)macros.size();
 
     auto* state = new SessionState();
-    if (SLANG_FAILED(global->createSession(sessionDesc, state->session.writeRef())))
+    state->global = global;
+    if (SLANG_FAILED(global->createSession(desc, state->session.writeRef())))
     {
         delete state;
         return 0;
     }
-    return reinterpret_cast<jlong>(state);
+    return handle(state);
 }
 
-extern "C" JNIEXPORT void JNICALL
-Java_com_shivaduke_kotlinslang_SlangSession_nativeDestroy(
-    JNIEnv* /*env*/,
-    jobject /*thiz*/,
-    jlong jSession)
+// ---------------------------------------------------------------------------
+// ISession
+// ---------------------------------------------------------------------------
+
+JNI_FN(void, sessionRelease)(JNIEnv*, jclass, jlong h)
 {
-    delete reinterpret_cast<SessionState*>(jSession);
+    delete ptr<SessionState>(h);
 }
 
-// Returns the diagnostics Slang produced while loading (possibly empty) and stores the
-// module handle in outModule[0], or 0 when loading failed.
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_shivaduke_kotlinslang_SlangSession_nativeLoadModule(
+JNI_FN(jlong, sessionLoadModule)(
+    JNIEnv* env, jclass, jlong h, jstring jModuleName, jobjectArray outDiagnostics)
+{
+    Slang::ComPtr<ISlangBlob> diagnostics;
+    IModule* module = ptr<SessionState>(h)->session->loadModule(
+        toStdString(env, jModuleName).c_str(), diagnostics.writeRef());
+    setDiagnostics(env, outDiagnostics, diagnostics);
+    return handle(static_cast<IComponentType*>(module));
+}
+
+JNI_FN(jlong, sessionLoadModuleFromSourceString)(
     JNIEnv* env,
-    jobject /*thiz*/,
-    jlong jSession,
-    jstring jName,
+    jclass,
+    jlong h,
+    jstring jModuleName,
     jstring jPath,
-    jstring jSource,
-    jlongArray jOutModule)
+    jstring jString,
+    jobjectArray outDiagnostics)
 {
-    auto* state = reinterpret_cast<SessionState*>(jSession);
-    const std::string name = toStdString(env, jName);
-    const std::string path = toStdString(env, jPath);
-    const std::string source = toStdString(env, jSource);
-
-    Slang::ComPtr<ISlangBlob> diag;
-    slang::IModule* module = state->session->loadModuleFromSourceString(
-        name.c_str(), path.c_str(), source.c_str(), diag.writeRef());
-
-    const jlong handle = reinterpret_cast<jlong>(module);
-    env->SetLongArrayRegion(jOutModule, 0, 1, &handle);
-
-    std::string text;
-    if (diag)
-        text.assign(static_cast<const char*>(diag->getBufferPointer()), diag->getBufferSize());
-    return env->NewStringUTF(text.c_str());
+    Slang::ComPtr<ISlangBlob> diagnostics;
+    IModule* module = ptr<SessionState>(h)->session->loadModuleFromSourceString(
+        toStdString(env, jModuleName).c_str(),
+        toStdString(env, jPath).c_str(),
+        toStdString(env, jString).c_str(),
+        diagnostics.writeRef());
+    setDiagnostics(env, outDiagnostics, diagnostics);
+    return handle(static_cast<IComponentType*>(module));
 }
 
-extern "C" JNIEXPORT jobject JNICALL
-Java_com_shivaduke_kotlinslang_SlangSession_nativeCompile(
-    JNIEnv* env,
-    jobject /*thiz*/,
-    jlong jSession,
-    jlong jModule)
+JNI_FN(jlong, sessionCreateCompositeComponentType)(
+    JNIEnv* env, jclass, jlong h, jlongArray jComponentTypes, jobjectArray outDiagnostics)
 {
-    using namespace slang;
+    SessionState* state = ptr<SessionState>(h);
 
-    ISession* session = reinterpret_cast<SessionState*>(jSession)->session.get();
-    auto* module = reinterpret_cast<IModule*>(jModule);
+    const jsize count = env->GetArrayLength(jComponentTypes);
+    std::vector<jlong> handles(count);
+    env->GetLongArrayRegion(jComponentTypes, 0, count, handles.data());
+    std::vector<IComponentType*> components(count);
+    for (jsize i = 0; i < count; i++)
+        components[i] = ptr<IComponentType>(handles[i]);
 
-    const SlangInt32 entryPointCount = module->getDefinedEntryPointCount();
-    std::vector<Slang::ComPtr<IEntryPoint>> entryPoints;
-    std::vector<IComponentType*> components = {module};
-    for (SlangInt32 e = 0; e < entryPointCount; e++)
-    {
-        Slang::ComPtr<IEntryPoint> ep;
-        if (SLANG_FAILED(module->getDefinedEntryPoint(e, ep.writeRef())))
-            continue;
-        components.push_back(ep.get());
-        entryPoints.push_back(ep);
-    }
+    Slang::ComPtr<IComponentType> composite;
+    Slang::ComPtr<ISlangBlob> diagnostics;
+    const SlangResult result = state->session->createCompositeComponentType(
+        components.data(), (SlangInt)components.size(), composite.writeRef(), diagnostics.writeRef());
+    setDiagnostics(env, outDiagnostics, diagnostics);
+    if (SLANG_FAILED(result) || !composite)
+        return 0;
+    return state->keep(composite);
+}
 
-    Slang::ComPtr<IComponentType> program;
-    if (SLANG_FAILED(session->createCompositeComponentType(
-            components.data(), (SlangInt)components.size(), program.writeRef())))
-        return makeError(env, "compose", nullptr);
+JNI_FN(jlong, sessionGetLoadedModuleCount)(JNIEnv*, jclass, jlong h)
+{
+    return (jlong)ptr<SessionState>(h)->session->getLoadedModuleCount();
+}
 
+JNI_FN(jlong, sessionGetLoadedModule)(JNIEnv*, jclass, jlong h, jlong index)
+{
+    IModule* module = ptr<SessionState>(h)->session->getLoadedModule((SlangInt)index);
+    return handle(static_cast<IComponentType*>(module));
+}
+
+// ---------------------------------------------------------------------------
+// IComponentType
+// ---------------------------------------------------------------------------
+
+JNI_FN(jlong, componentTypeGetLayout)(
+    JNIEnv* env, jclass, jlong h, jlong targetIndex, jobjectArray outDiagnostics)
+{
+    Slang::ComPtr<ISlangBlob> diagnostics;
+    ProgramLayout* layout =
+        ptr<IComponentType>(h)->getLayout((SlangInt)targetIndex, diagnostics.writeRef());
+    setDiagnostics(env, outDiagnostics, diagnostics);
+    return handle(layout);
+}
+
+JNI_FN(jbyteArray, componentTypeGetEntryPointCode)(
+    JNIEnv* env,
+    jclass,
+    jlong h,
+    jlong entryPointIndex,
+    jlong targetIndex,
+    jobjectArray outDiagnostics)
+{
+    Slang::ComPtr<ISlangBlob> code;
+    Slang::ComPtr<ISlangBlob> diagnostics;
+    const SlangResult result = ptr<IComponentType>(h)->getEntryPointCode(
+        (SlangInt)entryPointIndex, (SlangInt)targetIndex, code.writeRef(), diagnostics.writeRef());
+    setDiagnostics(env, outDiagnostics, diagnostics);
+    return SLANG_FAILED(result) ? nullptr : toByteArray(env, code);
+}
+
+JNI_FN(jbyteArray, componentTypeGetTargetCode)(
+    JNIEnv* env, jclass, jlong h, jlong targetIndex, jobjectArray outDiagnostics)
+{
+    Slang::ComPtr<ISlangBlob> code;
+    Slang::ComPtr<ISlangBlob> diagnostics;
+    const SlangResult result = ptr<IComponentType>(h)->getTargetCode(
+        (SlangInt)targetIndex, code.writeRef(), diagnostics.writeRef());
+    setDiagnostics(env, outDiagnostics, diagnostics);
+    return SLANG_FAILED(result) ? nullptr : toByteArray(env, code);
+}
+
+JNI_FN(jlong, componentTypeLink)(
+    JNIEnv* env, jclass, jlong session, jlong h, jobjectArray outDiagnostics)
+{
     Slang::ComPtr<IComponentType> linked;
-    Slang::ComPtr<ISlangBlob> linkDiag;
-    if (SLANG_FAILED(program->link(linked.writeRef(), linkDiag.writeRef())))
-        return makeError(
-            env,
-            "link",
-            linkDiag ? static_cast<const char*>(linkDiag->getBufferPointer()) : nullptr);
+    Slang::ComPtr<ISlangBlob> diagnostics;
+    const SlangResult result =
+        ptr<IComponentType>(h)->link(linked.writeRef(), diagnostics.writeRef());
+    setDiagnostics(env, outDiagnostics, diagnostics);
+    if (SLANG_FAILED(result) || !linked)
+        return 0;
+    return ptr<SessionState>(session)->keep(linked);
+}
 
-    Slang::ComPtr<ISlangBlob> layoutDiag;
-    ProgramLayout* layout = linked->getLayout(0, layoutDiag.writeRef());
-    if (!layout)
-        return makeError(
-            env,
-            "layout",
-            layoutDiag ? static_cast<const char*>(layoutDiag->getBufferPointer()) : nullptr);
+// ---------------------------------------------------------------------------
+// IModule
+// ---------------------------------------------------------------------------
 
-    std::string json = "{\"ok\":true";
+JNI_FN(jlong, moduleFindEntryPointByName)(
+    JNIEnv* env, jclass, jlong session, jlong h, jstring jName)
+{
+    Slang::ComPtr<IEntryPoint> entryPoint;
+    const SlangResult result = modulePtr(h)->findEntryPointByName(
+        toStdString(env, jName).c_str(), entryPoint.writeRef());
+    if (SLANG_FAILED(result) || !entryPoint)
+        return 0;
+    return ptr<SessionState>(session)->keep(entryPoint);
+}
 
-    json += ",\"entryPoints\":[";
-    std::vector<Slang::ComPtr<ISlangBlob>> blobs;
-    for (size_t e = 0; e < entryPoints.size(); e++)
-    {
-        Slang::ComPtr<ISlangBlob> code;
-        Slang::ComPtr<ISlangBlob> emitDiag;
-        if (SLANG_FAILED(
-                linked->getEntryPointCode((SlangInt)e, 0, code.writeRef(), emitDiag.writeRef())))
-            return makeError(
-                env,
-                "emit",
-                emitDiag ? static_cast<const char*>(emitDiag->getBufferPointer()) : nullptr);
+JNI_FN(jint, moduleGetDefinedEntryPointCount)(JNIEnv*, jclass, jlong h)
+{
+    return (jint)modulePtr(h)->getDefinedEntryPointCount();
+}
 
-        EntryPointReflection* ep = layout->getEntryPointByIndex((SlangUInt)e);
-        if (e > 0)
-            json += ',';
-        json += '{';
-        appendString(json, "name", ep ? ep->getName() : "");
-        json += ",\"stage\":" + std::to_string(ep ? (int)ep->getStage() : 0);
-        json += ",\"spirvIndex\":" + std::to_string(blobs.size());
-        json += ',';
-        appendUserAttributes(json, ep ? ep->getFunction() : nullptr);
-        json += '}';
-        blobs.push_back(code);
-    }
-    json += ']';
+JNI_FN(jlong, moduleGetDefinedEntryPoint)(JNIEnv*, jclass, jlong session, jlong h, jint index)
+{
+    Slang::ComPtr<IEntryPoint> entryPoint;
+    const SlangResult result =
+        modulePtr(h)->getDefinedEntryPoint((SlangInt32)index, entryPoint.writeRef());
+    if (SLANG_FAILED(result) || !entryPoint)
+        return 0;
+    return ptr<SessionState>(session)->keep(entryPoint);
+}
 
-    json += ',';
-    if (const char* globalCbError = appendGlobalConstantBuffer(json, layout))
-        return makeError(env, "layout", globalCbError);
+JNI_FN(jstring, moduleGetName)(JNIEnv* env, jclass, jlong h)
+{
+    return toJString(env, modulePtr(h)->getName());
+}
 
-    json += ",\"parameters\":[";
-    const unsigned paramCount = layout->getParameterCount();
-    for (unsigned p = 0; p < paramCount; p++)
-    {
-        if (p > 0)
-            json += ',';
-        appendParameter(json, layout->getParameterByIndex(p));
-    }
-    json += "]}";
+JNI_FN(jstring, moduleGetFilePath)(JNIEnv* env, jclass, jlong h)
+{
+    return toJString(env, modulePtr(h)->getFilePath());
+}
 
-    return makeResult(env, json, blobs);
+JNI_FN(jlong, moduleFindAndCheckEntryPoint)(
+    JNIEnv* env,
+    jclass,
+    jlong session,
+    jlong h,
+    jstring jName,
+    jint stage,
+    jobjectArray outDiagnostics)
+{
+    Slang::ComPtr<IEntryPoint> entryPoint;
+    Slang::ComPtr<ISlangBlob> diagnostics;
+    const SlangResult result = modulePtr(h)->findAndCheckEntryPoint(
+        toStdString(env, jName).c_str(),
+        (SlangStage)stage,
+        entryPoint.writeRef(),
+        diagnostics.writeRef());
+    setDiagnostics(env, outDiagnostics, diagnostics);
+    if (SLANG_FAILED(result) || !entryPoint)
+        return 0;
+    return ptr<SessionState>(session)->keep(entryPoint);
+}
+
+// ---------------------------------------------------------------------------
+// IEntryPoint
+// ---------------------------------------------------------------------------
+
+JNI_FN(jlong, entryPointGetFunctionReflection)(JNIEnv*, jclass, jlong h)
+{
+    return handle(entryPointPtr(h)->getFunctionReflection());
+}
+
+// ---------------------------------------------------------------------------
+// ProgramLayout (ShaderReflection)
+// ---------------------------------------------------------------------------
+
+GET(jint, programLayoutGetParameterCount, ProgramLayout, (jint)self->getParameterCount())
+GET_I(jlong, programLayoutGetParameterByIndex, ProgramLayout, handle(self->getParameterByIndex((unsigned)i)))
+GET(jlong, programLayoutGetEntryPointCount, ProgramLayout, (jlong)self->getEntryPointCount())
+GET_I(jlong, programLayoutGetEntryPointByIndex, ProgramLayout, handle(self->getEntryPointByIndex((SlangUInt)i)))
+GET(jlong, programLayoutGetGlobalConstantBufferBinding, ProgramLayout, (jlong)self->getGlobalConstantBufferBinding())
+GET(jlong, programLayoutGetGlobalConstantBufferSize, ProgramLayout, (jlong)self->getGlobalConstantBufferSize())
+GET(jlong, programLayoutGetGlobalParamsTypeLayout, ProgramLayout, handle(self->getGlobalParamsTypeLayout()))
+GET(jlong, programLayoutGetGlobalParamsVarLayout, ProgramLayout, handle(self->getGlobalParamsVarLayout()))
+
+JNI_FN(jlong, programLayoutFindEntryPointByName)(JNIEnv* env, jclass, jlong h, jstring jName)
+{
+    return handle(ptr<ProgramLayout>(h)->findEntryPointByName(toStdString(env, jName).c_str()));
+}
+
+// ---------------------------------------------------------------------------
+// EntryPointReflection
+// ---------------------------------------------------------------------------
+
+GET(jstring, entryPointReflectionGetName, EntryPointReflection, toJString(env, self->getName()))
+GET(jstring, entryPointReflectionGetNameOverride, EntryPointReflection, toJString(env, self->getNameOverride()))
+GET(jint, entryPointReflectionGetParameterCount, EntryPointReflection, (jint)self->getParameterCount())
+GET(jlong, entryPointReflectionGetFunction, EntryPointReflection, handle(self->getFunction()))
+GET_I(jlong, entryPointReflectionGetParameterByIndex, EntryPointReflection, handle(self->getParameterByIndex((unsigned)i)))
+GET(jint, entryPointReflectionGetStage, EntryPointReflection, (jint)self->getStage())
+GET(jlong, entryPointReflectionGetVarLayout, EntryPointReflection, handle(self->getVarLayout()))
+GET(jlong, entryPointReflectionGetTypeLayout, EntryPointReflection, handle(self->getTypeLayout()))
+GET(jlong, entryPointReflectionGetResultVarLayout, EntryPointReflection, handle(self->getResultVarLayout()))
+GET(jboolean, entryPointReflectionHasDefaultConstantBuffer, EntryPointReflection, (jboolean)self->hasDefaultConstantBuffer())
+
+// Fills outSizeAlongAxis, whose length is the axis count.
+JNI_FN(void, entryPointReflectionGetComputeThreadGroupSize)(
+    JNIEnv* env, jclass, jlong h, jlongArray outSizeAlongAxis)
+{
+    const jsize axisCount = env->GetArrayLength(outSizeAlongAxis);
+    std::vector<SlangUInt> sizes(axisCount, 0);
+    ptr<EntryPointReflection>(h)->getComputeThreadGroupSize((SlangUInt)axisCount, sizes.data());
+    std::vector<jlong> out(sizes.begin(), sizes.end());
+    env->SetLongArrayRegion(outSizeAlongAxis, 0, axisCount, out.data());
+}
+
+// ---------------------------------------------------------------------------
+// FunctionReflection
+// ---------------------------------------------------------------------------
+
+GET(jstring, functionReflectionGetName, FunctionReflection, toJString(env, self->getName()))
+GET(jlong, functionReflectionGetReturnType, FunctionReflection, handle(self->getReturnType()))
+GET(jint, functionReflectionGetParameterCount, FunctionReflection, (jint)self->getParameterCount())
+GET_I(jlong, functionReflectionGetParameterByIndex, FunctionReflection, handle(self->getParameterByIndex((unsigned)i)))
+GET(jint, functionReflectionGetUserAttributeCount, FunctionReflection, (jint)self->getUserAttributeCount())
+GET_I(jlong, functionReflectionGetUserAttributeByIndex, FunctionReflection, handle(self->getUserAttributeByIndex((unsigned)i)))
+
+// ---------------------------------------------------------------------------
+// VariableReflection
+// ---------------------------------------------------------------------------
+
+GET(jstring, variableReflectionGetName, VariableReflection, toJString(env, self->getName()))
+GET(jlong, variableReflectionGetType, VariableReflection, handle(self->getType()))
+GET(jint, variableReflectionGetUserAttributeCount, VariableReflection, (jint)self->getUserAttributeCount())
+GET_I(jlong, variableReflectionGetUserAttributeByIndex, VariableReflection, handle(self->getUserAttributeByIndex((unsigned)i)))
+
+// ---------------------------------------------------------------------------
+// VariableLayoutReflection
+// ---------------------------------------------------------------------------
+
+GET(jlong, variableLayoutReflectionGetVariable, VariableLayoutReflection, handle(self->getVariable()))
+GET(jstring, variableLayoutReflectionGetName, VariableLayoutReflection, toJString(env, self->getName()))
+GET(jlong, variableLayoutReflectionGetTypeLayout, VariableLayoutReflection, handle(self->getTypeLayout()))
+GET(jint, variableLayoutReflectionGetCategory, VariableLayoutReflection, (jint)self->getCategory())
+GET(jint, variableLayoutReflectionGetCategoryCount, VariableLayoutReflection, (jint)self->getCategoryCount())
+GET_I(jint, variableLayoutReflectionGetCategoryByIndex, VariableLayoutReflection, (jint)self->getCategoryByIndex((unsigned)i))
+GET_I(jlong, variableLayoutReflectionGetOffset, VariableLayoutReflection, (jlong)self->getOffset((SlangParameterCategory)i))
+GET(jlong, variableLayoutReflectionGetType, VariableLayoutReflection, handle(self->getType()))
+GET(jint, variableLayoutReflectionGetBindingIndex, VariableLayoutReflection, (jint)self->getBindingIndex())
+GET(jint, variableLayoutReflectionGetBindingSpace, VariableLayoutReflection, (jint)self->getBindingSpace())
+GET_I(jlong, variableLayoutReflectionGetBindingSpaceForCategory, VariableLayoutReflection, (jlong)self->getBindingSpace((SlangParameterCategory)i))
+GET(jstring, variableLayoutReflectionGetSemanticName, VariableLayoutReflection, toJString(env, self->getSemanticName()))
+GET(jlong, variableLayoutReflectionGetSemanticIndex, VariableLayoutReflection, (jlong)self->getSemanticIndex())
+GET(jint, variableLayoutReflectionGetStage, VariableLayoutReflection, (jint)self->getStage())
+
+// ---------------------------------------------------------------------------
+// TypeReflection
+// ---------------------------------------------------------------------------
+
+GET(jint, typeReflectionGetKind, TypeReflection, (jint)self->getKind())
+GET(jint, typeReflectionGetFieldCount, TypeReflection, (jint)self->getFieldCount())
+GET_I(jlong, typeReflectionGetFieldByIndex, TypeReflection, handle(self->getFieldByIndex((unsigned)i)))
+GET(jboolean, typeReflectionIsArray, TypeReflection, (jboolean)self->isArray())
+GET(jlong, typeReflectionUnwrapArray, TypeReflection, handle(self->unwrapArray()))
+GET(jlong, typeReflectionGetElementCount, TypeReflection, (jlong)self->getElementCount())
+GET(jlong, typeReflectionGetElementType, TypeReflection, handle(self->getElementType()))
+GET(jint, typeReflectionGetRowCount, TypeReflection, (jint)self->getRowCount())
+GET(jint, typeReflectionGetColumnCount, TypeReflection, (jint)self->getColumnCount())
+GET(jint, typeReflectionGetScalarType, TypeReflection, (jint)self->getScalarType())
+GET(jlong, typeReflectionGetResourceResultType, TypeReflection, handle(self->getResourceResultType()))
+GET(jstring, typeReflectionGetName, TypeReflection, toJString(env, self->getName()))
+GET(jint, typeReflectionGetUserAttributeCount, TypeReflection, (jint)self->getUserAttributeCount())
+GET_I(jlong, typeReflectionGetUserAttributeByIndex, TypeReflection, handle(self->getUserAttributeByIndex((unsigned)i)))
+
+// ---------------------------------------------------------------------------
+// TypeLayoutReflection
+// ---------------------------------------------------------------------------
+
+GET(jlong, typeLayoutReflectionGetType, TypeLayoutReflection, handle(self->getType()))
+GET(jint, typeLayoutReflectionGetKind, TypeLayoutReflection, (jint)self->getKind())
+GET_I(jlong, typeLayoutReflectionGetSize, TypeLayoutReflection, (jlong)self->getSize((SlangParameterCategory)i))
+GET_I(jlong, typeLayoutReflectionGetStride, TypeLayoutReflection, (jlong)self->getStride((SlangParameterCategory)i))
+GET_I(jint, typeLayoutReflectionGetAlignment, TypeLayoutReflection, (jint)self->getAlignment((SlangParameterCategory)i))
+GET(jint, typeLayoutReflectionGetFieldCount, TypeLayoutReflection, (jint)self->getFieldCount())
+GET_I(jlong, typeLayoutReflectionGetFieldByIndex, TypeLayoutReflection, handle(self->getFieldByIndex((unsigned)i)))
+GET(jboolean, typeLayoutReflectionIsArray, TypeLayoutReflection, (jboolean)self->isArray())
+GET(jlong, typeLayoutReflectionUnwrapArray, TypeLayoutReflection, handle(self->unwrapArray()))
+GET(jlong, typeLayoutReflectionGetElementCount, TypeLayoutReflection, (jlong)self->getElementCount())
+GET_I(jlong, typeLayoutReflectionGetElementStride, TypeLayoutReflection, (jlong)self->getElementStride((SlangParameterCategory)i))
+GET(jlong, typeLayoutReflectionGetElementTypeLayout, TypeLayoutReflection, handle(self->getElementTypeLayout()))
+GET(jlong, typeLayoutReflectionGetElementVarLayout, TypeLayoutReflection, handle(self->getElementVarLayout()))
+GET(jlong, typeLayoutReflectionGetContainerVarLayout, TypeLayoutReflection, handle(self->getContainerVarLayout()))
+GET(jint, typeLayoutReflectionGetParameterCategory, TypeLayoutReflection, (jint)self->getParameterCategory())
+GET(jint, typeLayoutReflectionGetCategoryCount, TypeLayoutReflection, (jint)self->getCategoryCount())
+GET_I(jint, typeLayoutReflectionGetCategoryByIndex, TypeLayoutReflection, (jint)self->getCategoryByIndex((unsigned)i))
+GET(jint, typeLayoutReflectionGetRowCount, TypeLayoutReflection, (jint)self->getRowCount())
+GET(jint, typeLayoutReflectionGetColumnCount, TypeLayoutReflection, (jint)self->getColumnCount())
+GET(jint, typeLayoutReflectionGetScalarType, TypeLayoutReflection, (jint)self->getScalarType())
+GET(jlong, typeLayoutReflectionGetResourceResultType, TypeLayoutReflection, handle(self->getResourceResultType()))
+GET(jstring, typeLayoutReflectionGetName, TypeLayoutReflection, toJString(env, self->getName()))
+
+JNI_FN(jlong, typeLayoutReflectionFindFieldIndexByName)(JNIEnv* env, jclass, jlong h, jstring jName)
+{
+    return (jlong)ptr<TypeLayoutReflection>(h)->findFieldIndexByName(
+        toStdString(env, jName).c_str());
+}
+
+// ---------------------------------------------------------------------------
+// Attribute (UserAttribute)
+// ---------------------------------------------------------------------------
+
+GET(jstring, attributeGetName, Attribute, toJString(env, self->getName()))
+GET(jint, attributeGetArgumentCount, Attribute, (jint)self->getArgumentCount())
+GET_I(jlong, attributeGetArgumentType, Attribute, handle(self->getArgumentType((uint32_t)i)))
+
+// The getArgumentValue* functions return whether the SlangResult succeeded and store
+// the value in out[0].
+JNI_FN(jboolean, attributeGetArgumentValueInt)(
+    JNIEnv* env, jclass, jlong h, jint index, jintArray out)
+{
+    int value = 0;
+    if (SLANG_FAILED(ptr<Attribute>(h)->getArgumentValueInt((uint32_t)index, &value)))
+        return JNI_FALSE;
+    const jint jValue = value;
+    env->SetIntArrayRegion(out, 0, 1, &jValue);
+    return JNI_TRUE;
+}
+
+JNI_FN(jboolean, attributeGetArgumentValueFloat)(
+    JNIEnv* env, jclass, jlong h, jint index, jfloatArray out)
+{
+    float value = 0;
+    if (SLANG_FAILED(ptr<Attribute>(h)->getArgumentValueFloat((uint32_t)index, &value)))
+        return JNI_FALSE;
+    env->SetFloatArrayRegion(out, 0, 1, &value);
+    return JNI_TRUE;
+}
+
+JNI_FN(jstring, attributeGetArgumentValueString)(JNIEnv* env, jclass, jlong h, jint index)
+{
+    size_t size = 0;
+    const char* value = ptr<Attribute>(h)->getArgumentValueString((uint32_t)index, &size);
+    if (!value)
+        return nullptr;
+    return env->NewStringUTF(std::string(value, size).c_str());
 }

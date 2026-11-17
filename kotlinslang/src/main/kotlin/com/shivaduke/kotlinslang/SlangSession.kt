@@ -1,192 +1,115 @@
 package com.shivaduke.kotlinslang
 
-import org.json.JSONArray
-import org.json.JSONObject
-
 /**
- * A Slang compilation session: a set of preprocessor macros plus the modules loaded so
- * far. Counterpart of `slang::ISession`, targeting SPIR-V.
+ * `slang::ISession`: a scope for loading modules and compiling them for the targets given
+ * in its [SlangSessionDesc].
  *
- * Modules loaded into a session stay loaded, so a module can `import` any module loaded
- * before it by name, and a shared module is parsed once no matter how many other modules
- * import it.
+ * Modules stay loaded in the session, so a module can `import` any module already loaded
+ * into it by name, and a module is parsed once no matter how many others import it.
  *
- * ```
- * SlangSession(macros).use { session ->
- *     session.loadModule("common", commonSource)
- *     val result = session.loadModule("main", "import common; ...").compile()
- * }
- * ```
+ * The session owns every object obtained from it, directly or indirectly: modules, entry
+ * points, composite and linked component types, and all reflection objects. They stay
+ * valid until [close] and throw [IllegalStateException] when used afterwards. Native
+ * memory grows with everything loaded and linked in the session until it is closed.
  *
- * A session holds native memory that grows with every module loaded; [close] it when
- * done. Slang's global session is not thread-safe, so sessions and their modules must be
- * used from a single thread, or calls must be serialized by the application.
- *
- * @param macros preprocessor macros defined for every module loaded into the session
- * @throws SlangCompileException if the native session cannot be created
+ * Not thread-safe; see [SlangGlobalSession].
  */
-class SlangSession(macros: Map<String, String> = emptyMap()) : AutoCloseable {
+class SlangSession internal constructor(
+    /** `ISession::getGlobalSession`. */
+    val globalSession: SlangGlobalSession,
+    private var handle: Long,
+) : AutoCloseable {
 
-    private var handle: Long =
-        nativeCreate(macros.keys.toTypedArray(), macros.values.toTypedArray())
-
-    init {
-        if (handle == 0L) throw SlangCompileException("session", "")
+    /**
+     * `ISession::loadModule`: loads a module as `import moduleName;` would, from the
+     * modules already loaded or from the session's search paths.
+     *
+     * @param outDiagnostics receives the diagnostics Slang produced, if any
+     * @throws SlangCompileException with stage `load` if the module cannot be loaded
+     */
+    fun loadModule(moduleName: String, outDiagnostics: StringBuilder? = null): SlangModule {
+        val diagnostics = arrayOfNulls<String>(1)
+        val module = SlangNative.sessionLoadModule(requireOpen(), moduleName, diagnostics)
+        return SlangModule(this, checkResult("load", module, diagnostics, outDiagnostics))
     }
 
     /**
-     * Loads [source] into the session as the module [name], which other modules can then
-     * refer to with `import name;`. Counterpart of `ISession::loadModuleFromSourceString`.
+     * `ISession::loadModuleFromSourceString`: loads [string] as the module [moduleName],
+     * which modules loaded afterwards can refer to with `import moduleName;`.
      *
-     * [path] is the file name Slang reports in diagnostics for this source.
-     *
-     * @throws SlangCompileException with stage `load` if the source does not compile,
-     * carrying Slang diagnostics
-     * @throws IllegalStateException if the session is closed
+     * @param path the file name Slang reports in diagnostics for this source
+     * @param outDiagnostics receives the diagnostics Slang produced, if any
+     * @throws SlangCompileException with stage `load` if the source does not compile
      */
-    fun loadModule(name: String, source: String, path: String = "$name.slang"): SlangModule {
-        val outModule = LongArray(1)
-        val diagnostics = nativeLoadModule(requireOpen(), name, path, source, outModule)
-        if (outModule[0] == 0L) throw SlangCompileException("load", diagnostics)
-        return SlangModule(this, outModule[0], name, diagnostics)
+    fun loadModuleFromSourceString(
+        moduleName: String,
+        path: String,
+        string: String,
+        outDiagnostics: StringBuilder? = null,
+    ): SlangModule {
+        val diagnostics = arrayOfNulls<String>(1)
+        val module = SlangNative.sessionLoadModuleFromSourceString(
+            requireOpen(), moduleName, path, string, diagnostics,
+        )
+        return SlangModule(this, checkResult("load", module, diagnostics, outDiagnostics))
     }
 
-    /** Releases the native session. Modules loaded from it can no longer be compiled. */
+    /**
+     * `ISession::createCompositeComponentType`: combines modules and entry points into
+     * one component type, in the given order.
+     *
+     * @param outDiagnostics receives the diagnostics Slang produced, if any
+     * @throws SlangCompileException with stage `compose` on failure
+     */
+    fun createCompositeComponentType(
+        componentTypes: List<SlangComponentType>,
+        outDiagnostics: StringBuilder? = null,
+    ): SlangComponentType {
+        componentTypes.forEach { require(it.session === this) { "Component type belongs to another session" } }
+        val diagnostics = arrayOfNulls<String>(1)
+        val composite = SlangNative.sessionCreateCompositeComponentType(
+            requireOpen(),
+            LongArray(componentTypes.size) { componentTypes[it].handle },
+            diagnostics,
+        )
+        return SlangComponentType(this, checkResult("compose", composite, diagnostics, outDiagnostics))
+    }
+
+    /** `ISession::getLoadedModuleCount`. */
+    val loadedModuleCount: Long
+        get() = SlangNative.sessionGetLoadedModuleCount(requireOpen())
+
+    /** `ISession::getLoadedModule`. */
+    fun getLoadedModule(index: Long): SlangModule? =
+        SlangNative.sessionGetLoadedModule(requireOpen(), index).takeIf { it != 0L }
+            ?.let { SlangModule(this, it) }
+
+    /** Releases the session and everything obtained from it. */
     override fun close() {
         if (handle != 0L) {
-            nativeDestroy(handle)
+            SlangNative.sessionRelease(handle)
             handle = 0L
         }
     }
 
-    internal fun compile(module: SlangModule): CompileResult {
-        val result = nativeCompile(requireOpen(), module.handle)
-            ?: throw SlangCompileException("jni", "nativeCompile returned null")
-        return parseResult(result, module.diagnostics)
-    }
-
-    private fun requireOpen(): Long {
+    internal fun requireOpen(): Long {
         check(handle != 0L) { "SlangSession is closed" }
         return handle
     }
 
-    private fun parseResult(result: NativeCompileResult, diagnostics: String): CompileResult {
-        val json = JSONObject(result.json)
-        if (!json.getBoolean("ok")) {
-            throw SlangCompileException(
-                json.optString("errorStage", "unknown"),
-                json.optString("diagnostics", ""),
-            )
-        }
-
-        val entryPoints = json.getJSONArray("entryPoints").map { ep ->
-            EntryPoint(
-                name = ep.getString("name"),
-                stage = ShaderStage.from(ep.getInt("stage")),
-                spirv = result.spirv[ep.getInt("spirvIndex")],
-                attributes = parseAttributes(ep.getJSONArray("attributes")),
-            )
-        }
-
-        val parameters = json.getJSONArray("parameters").map { p ->
-            ShaderParameter(
-                name = p.getString("name"),
-                category = ParameterCategory.from(p.getString("category")),
-                bindingIndex = p.getInt("bindingIndex"),
-                bindingSpace = p.getInt("bindingSpace"),
-                uniformOffset = p.getInt("uniformOffset"),
-                kind = TypeKind.from(p.optString("kind", "other")),
-                size = p.optInt("size", 0),
-                alignment = p.optInt("alignment", 0),
-                elementSize = p.optInt("elementSize", 0),
-                elementStride = p.optInt("elementStride", 0),
-                scalar = ScalarType.from(p.optString("scalar", "none")),
-                resourceResult = p.optJSONObject("resourceResult")?.let { r ->
-                    ResourceResultType(
-                        kind = TypeKind.from(r.getString("kind")),
-                        components = r.getInt("components"),
-                        scalar = ScalarType.from(r.getString("scalar")),
-                    )
-                },
-                attributes = parseAttributes(p.getJSONArray("attributes")),
-            )
-        }
-
-        val globalCb = json.optJSONObject("globalConstantBuffer")?.let { cb ->
-            GlobalConstantBuffer(
-                binding = cb.getInt("binding"),
-                space = cb.getInt("space"),
-                size = cb.getInt("size"),
-            )
-        }
-
-        return CompileResult(
-            entryPoints = entryPoints,
-            parameters = parameters,
-            globalConstantBuffer = globalCb,
-            diagnostics = diagnostics,
-        )
-    }
-
-    private fun parseAttributes(array: JSONArray): List<UserAttribute> = array.map { a ->
-        UserAttribute(
-            name = a.getString("name"),
-            args = a.getJSONArray("args").let { args ->
-                (0 until args.length()).map { args.get(it) }
-            },
-        )
-    }
-
-    private inline fun <T> JSONArray.map(transform: (JSONObject) -> T): List<T> =
-        (0 until length()).map { transform(getJSONObject(it)) }
-
-    private external fun nativeCreate(
-        macroKeys: Array<String>,
-        macroValues: Array<String>,
-    ): Long
-
-    private external fun nativeDestroy(session: Long)
-
-    private external fun nativeLoadModule(
-        session: Long,
-        name: String,
-        path: String,
-        source: String,
-        outModule: LongArray,
-    ): String
-
-    private external fun nativeCompile(session: Long, module: Long): NativeCompileResult?
-
-    companion object {
-        init {
-            System.loadLibrary("kotlinslang")
-        }
-    }
-}
-
-/**
- * A module loaded into a [SlangSession]. Counterpart of `slang::IModule`. It is valid
- * until its session is closed.
- */
-class SlangModule internal constructor(
-    private val session: SlangSession,
-    internal val handle: Long,
-    /** The name the module was loaded under, as used by `import`. */
-    val name: String,
-    /** Diagnostics Slang produced while loading the module; warnings only. */
-    val diagnostics: String,
-) {
-
     /**
-     * Links the module with every entry point it defines and returns the SPIR-V for each
-     * along with the reflection data of the linked program.
-     *
-     * Modules it imports, directly or transitively, are linked in: uniforms and resources
-     * they declare are part of the program and appear in [CompileResult.parameters].
-     * Entry points defined in imported modules are not compiled.
-     *
-     * @throws SlangCompileException on failure, carrying Slang diagnostics
-     * @throws IllegalStateException if the session is closed
+     * Forwards the diagnostics of a native call to [outDiagnostics] and returns [result],
+     * or throws when the call reported failure by returning null.
      */
-    fun compile(): CompileResult = session.compile(this)
+    internal fun <T> checkResult(
+        stage: String,
+        result: T?,
+        diagnostics: Array<String?>,
+        outDiagnostics: StringBuilder?,
+    ): T {
+        val text = diagnostics[0].orEmpty()
+        outDiagnostics?.append(text)
+        if (result == null || result == 0L) throw SlangCompileException(stage, text)
+        return result
+    }
 }

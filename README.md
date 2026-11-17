@@ -13,7 +13,7 @@ Slang → SPIR-V compilation to Kotlin via a thin JNI layer.
 ```
 libslang (C++, git submodule, static)          slang/ + Makefile
    ↑
-JNI wrapper: compile + reflection → JSON       kotlinslang/src/main/cpp/
+JNI wrapper: one function per Slang method     kotlinslang/src/main/cpp/
    ↑
 Kotlin API (Android library → AAR)             kotlinslang/src/main/kotlin/
 ```
@@ -23,9 +23,8 @@ Kotlin API (Android library → AAR)             kotlinslang/src/main/kotlin/
   affected only by the bundled `.so` (~11 MB download increment).
 - Slang is pinned to the same version as swift-slang (currently `v2026.22`)
   so that reflection behavior stays consistent across platforms.
-- The JNI surface is small: create a session, load a module from source, and
-  compile a module, which returns SPIR-V blobs plus reflection metadata (JSON).
-  Typed models live in Kotlin.
+- The JNI layer forwards each function to one method of the Slang C++ API. The
+  Kotlin classes mirror the Slang interfaces on top of it.
 
 ## Installation
 
@@ -57,6 +56,71 @@ no extra keep rules are needed in apps that enable R8/minification.
 
 ## Usage
 
+The API mirrors Slang's own (`slang.h`): the same objects, the same method
+names and argument order, with a `Slang` prefix. Slang's documentation applies
+as is.
+
+| Slang | kotlin-slang |
+| --- | --- |
+| `slang::createGlobalSession` | `SlangGlobalSession.create()` |
+| `IGlobalSession` | `SlangGlobalSession` |
+| `SessionDesc`, `TargetDesc` | `SlangSessionDesc`, `SlangTargetDesc` |
+| `ISession` | `SlangSession` |
+| `IComponentType` | `SlangComponentType` |
+| `IModule`, `IEntryPoint` | `SlangModule`, `SlangEntryPoint` |
+| `ProgramLayout`, `EntryPointReflection` | `SlangProgramLayout`, `SlangEntryPointReflection` |
+| `VariableLayoutReflection`, `TypeLayoutReflection` | `SlangVariableLayoutReflection`, `SlangTypeLayoutReflection` |
+| `VariableReflection`, `TypeReflection`, `FunctionReflection` | `SlangVariableReflection`, `SlangTypeReflection`, `SlangFunctionReflection` |
+| `Attribute` | `SlangAttribute` |
+
+```kotlin
+val global = SlangGlobalSession.create()   // expensive: create once and reuse
+val desc = SlangSessionDesc(
+    targets = listOf(SlangTargetDesc(SlangCompileTarget.Spirv, global.findProfile("spirv_1_5"))),
+    preprocessorMacros = mapOf("RESOLUTION_X" to "1920"),
+)
+
+global.createSession(desc).use { session ->
+    // Modules stay loaded in the session and can be imported by name.
+    session.loadModuleFromSourceString("common", "common.slang", commonSource)
+    val module = session.loadModuleFromSourceString("main", "main.slang", "import common;\n...")
+
+    val entryPoint = module.findEntryPointByName("fragmentMain")!!
+    val linked = session.createCompositeComponentType(listOf(module, entryPoint)).link()
+
+    val spirv = linked.getEntryPointCode(entryPointIndex = 0, targetIndex = 0)
+
+    val layout = linked.getLayout()
+    val param = layout.getParameterByIndex(0)!!
+    param.name
+    param.bindingIndex
+    param.typeLayout?.getSize()
+    param.variable?.getUserAttributeByIndex(0)?.getArgumentValueFloat(0)
+}
+```
+
+Where Kotlin conventions differ from C++:
+
+- Getters without arguments are properties (`getName()` → `name`).
+- Methods that report failure through a null or failed result throw
+  `SlangCompileException` carrying the diagnostics. `outDiagnostics` parameters
+  take an optional `StringBuilder` that receives the diagnostics, including
+  warnings on success.
+- Lookups that may legitimately find nothing return null.
+- A session owns everything obtained from it — modules, entry points, linked
+  programs and reflection objects — and releases it all in `close()`. Only
+  `SlangGlobalSession` and `SlangSession` need closing; anything used after its
+  session is closed throws `IllegalStateException`.
+
+Not every method of the Slang API is exposed yet; the ones that are behave as
+upstream.
+
+### Compiling a single source
+
+`SlangCompiler` is a convenience on top of the classes above: it compiles one
+self-contained source to SPIR-V 1.5 with all of its entry points and collects
+commonly needed reflection data into plain data classes.
+
 ```kotlin
 val compiler = SlangCompiler()
 val result = compiler.compile(source, macros = mapOf("RESOLUTION_X" to "1920"))
@@ -80,36 +144,6 @@ val topology = result.entryPoints.first().attribute("topology")
 topology?.intArg(0)
 ```
 
-### Sessions and modules
-
-`SlangCompiler.compile` runs each source in a fresh session. To load several
-modules that import one another, or to reuse loaded modules across
-compilations, use `SlangSession` directly. It follows the Slang API: load
-modules into a session from source strings (`ISession::loadModuleFromSourceString`),
-then compile one.
-
-```kotlin
-SlangSession(macros).use { session ->
-    session.loadModule("common", commonSource)
-    val result = session.loadModule("main", "import common;\n...").compile()
-}
-```
-
-- A module can `import` any module loaded into the session before it, by the
-  name it was loaded under. Loading a name again with a different source fails.
-- Declarations from an imported module behave like local ones: attributes it
-  declares with `__AttributeUsage` are reported with their argument values, and
-  its `static const` values are folded when used in attribute arguments.
-- `compile()` links the module with every entry point it defines. Uniforms and
-  resources declared in modules it imports are part of the program and show up
-  in `parameters`; entry points defined in imported modules are not compiled.
-  Modules that are loaded but not imported have no effect on the result.
-- Macros apply to every module in the session.
-- `loadModule` takes an optional `path` (default `<name>.slang`), the file name
-  Slang reports in diagnostics.
-- A session holds native memory until it is closed; modules are valid only
-  while their session is open.
-
 ### Requirements for Vulkan pipeline creation
 
 - `VkPipelineShaderStageCreateInfo::pName` must be `"main"`. Entry point names
@@ -125,8 +159,9 @@ layers are enabled.
 
 Compilation failures throw `SlangCompileException` with Slang diagnostics.
 
-Note: the Slang global session is not thread-safe — use `SlangCompiler`,
-`SlangSession` and `SlangModule` from a single thread (or serialize externally).
+Note: a Slang global session and the objects created from it are not
+thread-safe — use them, and `SlangCompiler`, from a single thread (or serialize
+externally).
 
 ## Building
 
