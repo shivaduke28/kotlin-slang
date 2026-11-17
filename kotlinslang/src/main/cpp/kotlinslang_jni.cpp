@@ -345,7 +345,9 @@ Java_com_shivaduke_kotlinslang_SlangCompiler_nativeCompile(
     jobject /*thiz*/,
     jstring jSource,
     jobjectArray jMacroKeys,
-    jobjectArray jMacroValues)
+    jobjectArray jMacroValues,
+    jobjectArray jModuleNames,
+    jobjectArray jModuleSources)
 {
     using namespace slang;
 
@@ -387,13 +389,44 @@ Java_com_shivaduke_kotlinslang_SlangCompiler_nativeCompile(
     if (SLANG_FAILED(global->createSession(sessionDesc, session.writeRef())))
         return makeError(env, "session", nullptr);
 
+    // Diagnostics from every successful load, additional modules first. On success this
+    // carries warnings only.
+    std::string loadDiagnostics;
+    const auto appendDiagnostics = [&loadDiagnostics](ISlangBlob* blob) {
+        if (blob)
+            loadDiagnostics.append(
+                static_cast<const char*>(blob->getBufferPointer()), blob->getBufferSize());
+    };
+
+    // Additional modules are loaded into the session first, so that the main source (and
+    // any module loaded after them) can resolve `import <name>;` against the session's
+    // loaded modules. They are not added to the program explicitly: linking pulls in the
+    // ones the main module actually imports, and the rest stay unused.
+    const jsize moduleCount = jModuleNames ? env->GetArrayLength(jModuleNames) : 0;
+    for (jsize i = 0; i < moduleCount; i++)
+    {
+        auto jName = (jstring)env->GetObjectArrayElement(jModuleNames, i);
+        auto jModuleSource = (jstring)env->GetObjectArrayElement(jModuleSources, i);
+        const std::string name = toStdString(env, jName);
+        const std::string moduleSource = toStdString(env, jModuleSource);
+        env->DeleteLocalRef(jName);
+        env->DeleteLocalRef(jModuleSource);
+
+        const std::string path = name + ".slang";
+        Slang::ComPtr<ISlangBlob> diag;
+        IModule* loaded = session->loadModuleFromSourceString(
+            name.c_str(), path.c_str(), moduleSource.c_str(), diag.writeRef());
+        appendDiagnostics(diag);
+        if (!loaded)
+            return makeError(env, "load", loadDiagnostics.c_str());
+    }
+
     Slang::ComPtr<ISlangBlob> loadDiag;
     IModule* module = session->loadModuleFromSourceString(
         "shader", "shader.slang", source.c_str(), loadDiag.writeRef());
-    const char* loadDiagText =
-        loadDiag ? static_cast<const char*>(loadDiag->getBufferPointer()) : nullptr;
+    appendDiagnostics(loadDiag);
     if (!module)
-        return makeError(env, "load", loadDiagText);
+        return makeError(env, "load", loadDiagnostics.c_str());
 
     const SlangInt32 entryPointCount = module->getDefinedEntryPointCount();
     std::vector<Slang::ComPtr<IEntryPoint>> entryPoints;
@@ -429,7 +462,7 @@ Java_com_shivaduke_kotlinslang_SlangCompiler_nativeCompile(
             layoutDiag ? static_cast<const char*>(layoutDiag->getBufferPointer()) : nullptr);
 
     std::string json = "{\"ok\":true,";
-    appendString(json, "diagnostics", loadDiagText ? loadDiagText : "");
+    appendString(json, "diagnostics", loadDiagnostics.c_str());
 
     json += ",\"entryPoints\":[";
     std::vector<Slang::ComPtr<ISlangBlob>> blobs;

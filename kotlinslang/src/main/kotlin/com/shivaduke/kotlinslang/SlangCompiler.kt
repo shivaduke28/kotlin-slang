@@ -17,11 +17,44 @@ class SlangCompiler {
      *
      * @throws SlangCompileException on compilation failure, carrying Slang diagnostics
      */
-    fun compile(source: String, macros: Map<String, String> = emptyMap()): CompileResult {
+    fun compile(source: String, macros: Map<String, String> = emptyMap()): CompileResult =
+        compile(source, macros, emptyMap())
+
+    /**
+     * Compiles [source] like [compile], with [modules] available to it for `import`.
+     *
+     * [modules] maps a module name to its Slang source. Each one is loaded into the same
+     * session before [source], so `import name;` in [source] resolves to it. Modules are
+     * loaded in the map's iteration order, so a module can only import the ones that come
+     * before it. [macros] apply to the modules as well.
+     *
+     * A module that [source] does not import, directly or transitively, has no effect on
+     * the result, though it is still compiled and its errors are reported. Uniforms and
+     * resources declared in an imported module are part of the program and appear in
+     * [CompileResult.parameters]. Entry points defined in [modules] are not compiled; only
+     * those in [source] are returned.
+     *
+     * @throws IllegalArgumentException if a module name is not a Slang identifier, or is
+     * the name reserved for [source] itself
+     * @throws SlangCompileException on compilation failure, carrying Slang diagnostics.
+     * Errors in a module are reported against `<name>.slang`.
+     */
+    fun compile(
+        source: String,
+        macros: Map<String, String>,
+        modules: Map<String, String>,
+    ): CompileResult {
+        for (name in modules.keys) {
+            require(MODULE_NAME.matches(name)) { "Module name is not an identifier: $name" }
+            require(name != MAIN_MODULE_NAME) { "Module name is reserved: $name" }
+        }
+
         val result = nativeCompile(
             source,
             macros.keys.toTypedArray(),
             macros.values.toTypedArray(),
+            modules.keys.toTypedArray(),
+            modules.values.toTypedArray(),
         ) ?: throw SlangCompileException("jni", "nativeCompile returned null")
 
         val json = JSONObject(result.json)
@@ -94,12 +127,19 @@ class SlangCompiler {
         source: String,
         macroKeys: Array<String>,
         macroValues: Array<String>,
+        moduleNames: Array<String>,
+        moduleSources: Array<String>,
     ): NativeCompileResult?
 
     private inline fun <T> JSONArray.map(transform: (JSONObject) -> T): List<T> =
         (0 until length()).map { transform(getJSONObject(it)) }
 
     companion object {
+        /** Name the JNI layer gives to the module built from the main source. */
+        private const val MAIN_MODULE_NAME = "shader"
+
+        private val MODULE_NAME = Regex("[A-Za-z_][A-Za-z0-9_]*")
+
         init {
             System.loadLibrary("kotlinslang")
         }

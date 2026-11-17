@@ -79,6 +79,31 @@ val topology = result.entryPoints.first().attribute("topology")
 topology?.intArg(0)
 ```
 
+### Additional modules
+
+Sources passed as `modules` (module name → source) are loaded into the same
+session before the main source, which can then `import` them by name:
+
+```kotlin
+val result = compiler.compile(
+    source = "import common;\n...",
+    macros = emptyMap(),
+    modules = mapOf("common" to commonSource),
+)
+```
+
+- Declarations from an imported module behave like local ones: attributes it
+  declares with `__AttributeUsage` are reported with their argument values, and
+  its `static const` values are folded when used in attribute arguments.
+- Modules are loaded in the map's iteration order, so a module can import only
+  the ones before it. Macros apply to modules too.
+- A module that the main source does not import has no effect on the result,
+  although it is still compiled and its errors are reported (against
+  `<name>.slang`).
+- Uniforms and resources declared in an imported module are part of the program
+  and show up in `parameters`. Entry points defined in modules are not compiled.
+- Module names must be identifiers; `shader` is reserved for the main source.
+
 ### Requirements for Vulkan pipeline creation
 
 - `VkPipelineShaderStageCreateInfo::pName` must be `"main"`. Entry point names
